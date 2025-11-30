@@ -5,6 +5,7 @@ from typing import Optional
 import os
 
 from llama_cpp import Llama
+from .models import AI_MODEL_REGISTRY, get_model_path
 
 # Default model location:
 # ShellPilot/
@@ -30,27 +31,33 @@ class AIEngine:
     - Provide high-level helpers like `analyze_file` and `ask`
     """
 
-    def __init__(self, model_path: Optional[Path] = None) -> None:
-        self.model_path = Path(model_path or _DEFAULT_MODEL)
+    def __init__(self, model_id: str = "phi-3.5-mini-q4") -> None:
+        if model_id not in AI_MODEL_REGISTRY:
+            raise ValueError(f"Unknown AI model id: {model_id}")
 
-        if not self.model_path.is_file():
-            raise FileNotFoundError(
-                f"AI model not found at {self.model_path}. "
-                "Make sure you downloaded the GGUF file."
-            )
+        self.model_id = model_id
+        self.model_spec = AI_MODEL_REGISTRY[model_id]
+        self.model_path = get_model_path(model_id)
 
         # CPU-only setup for now.
         n_threads = max(1, (os.cpu_count() or 4))
         self.n_threads = n_threads
 
-        self._llm = Llama(
+        # Ensure model file exists (or ask caller to download)
+        if not self.model_path.is_file():
+            raise FileNotFoundError(
+                f"AI model '{self.model_spec.name}' not found at {self.model_path}."
+            )
+
+        self._llm = self._create_llm()
+
+    def _create_llm(self) -> Llama:
+        return Llama(
             model_path=str(self.model_path),
-            # If your model was quantized with larger context, 8192 is a nice upgrade.
-            # If not, leaving 4096 is fine – no need to force it.
             n_ctx=8192,
-            n_threads=n_threads,
-            n_gpu_layers=0,   # CPU-only
-            n_batch=512,      # better throughput for longer generations
+            n_threads=self.n_threads,
+            n_gpu_layers=0,
+            n_batch=512,
         )
 
     def _run(
@@ -77,6 +84,60 @@ class AIEngine:
 
 
     # ---------- Public helpers ----------
+
+    def download_model(self, progress_cb=None) -> None:
+        """
+        Download the GGUF model for the current model_spec if it's missing.
+
+        `progress_cb(downloaded_bytes, total_bytes)` is optional and lets
+        the UI show progress.
+        """
+        if self.model_path.is_file():
+            return
+
+        self.model_path.parent.mkdir(parents=True, exist_ok=True)
+
+        url = self.model_spec.download_url
+        tmp_path = self.model_path.with_suffix(self.model_path.suffix + ".part")
+
+        with urllib.request.urlopen(url) as resp, open(tmp_path, "wb") as out:
+            total = resp.length or 0
+            downloaded = 0
+
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                downloaded += len(chunk)
+                if progress_cb and total:
+                    progress_cb(downloaded, total)
+
+        tmp_path.rename(self.model_path)
+
+    def switch_model(self, model_id: str) -> None:
+        """
+        Switch to another model in the registry.
+        Caller is responsible for ensuring the model file exists
+        (or calling download_model first).
+        """
+        if model_id == self.model_id:
+            return  # already on this model
+
+        if model_id not in AI_MODEL_REGISTRY:
+            raise ValueError(f"Unknown AI model id: {model_id}")
+
+        self.model_id = model_id
+        self.model_spec = AI_MODEL_REGISTRY[model_id]
+        self.model_path = get_model_path(model_id)
+
+        if not self.model_path.is_file():
+            raise FileNotFoundError(
+                f"AI model '{self.model_spec.name}' not found at {self.model_path}."
+            )
+
+        # Let the old Llama instance get GC'd
+        self._llm = self._create_llm()
 
     def analyze_file(self, path: Path, content: str) -> str:
         """
@@ -180,12 +241,36 @@ class AIEngine:
 # ---------- Singleton accessor ----------
 
 _engine: Optional[AIEngine] = None
+_current_model_id = "phi-3.5-mini-q4"
 
 def get_engine() -> AIEngine:
     """
     Lazy-load a global AIEngine instance.
     """
     global _engine
+    global _current_model_id
+
     if _engine is None:
-        _engine = AIEngine()
+        _engine = AIEngine(model_id=_current_model_id)
+    return _engine
+
+
+def set_engine_model(model_id: str) -> AIEngine:
+    """
+    Switch the global engine to a different model id.
+    Creates a new AIEngine if needed.
+    """
+    global _engine
+    global _current_model_id
+
+    if _engine is None:
+        _current_model_id = model_id
+        _engine = AIEngine(model_id=model_id)
+        return _engine
+
+    if model_id == _current_model_id:
+        return _engine
+
+    _current_model_id = model_id
+    _engine.switch_model(model_id)
     return _engine

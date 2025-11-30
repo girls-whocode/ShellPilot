@@ -38,7 +38,8 @@ from shellpilot.ui.action_menu import ActionMenu
 from shellpilot.utils.ls_colors import style_for_path
 from shellpilot.utils.log_highlighter import LogHighlighter
 from shellpilot.core.search import SearchQuery, SearchMode, FileTypeFilter, fuzzy_score
-from shellpilot.ai.engine import get_engine
+from shellpilot.ai.engine import get_engine, set_engine_model
+from shellpilot.ai.models import AI_MODEL_REGISTRY, get_model_path
 
 from shellpilot.core.git import is_git_repo, get_git_status
 from shellpilot.ui.widgets import FileList, CommandPreview, OutputPanel
@@ -1150,6 +1151,33 @@ class ShellPilotApp(App):
             )
 
     # ---------- AI helpers ----------
+    def action_switch_ai_model(self) -> None:
+        """
+        Let the user pick an AI model (small → large).
+        If the model file is missing, offer to download it.
+        """
+        if not self.output:
+            return
+
+        # Build a numbered list of models
+        lines = ["[b]Select AI model:[/b]", ""]
+        model_ids = list(AI_MODEL_REGISTRY.keys())
+        for idx, model_id in enumerate(model_ids, start=1):
+            spec = AI_MODEL_REGISTRY[model_id]
+            lines.append(
+                f"{idx}. [b]{spec.name}[/b] ({model_id}) "
+                f"- {spec.description} "
+                f"[dim](recommends ≥ {spec.recommended_ram_gb} GB RAM)[/dim]"
+            )
+
+        lines.append("")
+        lines.append("Use the [b]:[/b] command palette or config later to make this persistent.")
+        lines.append("For now, enter the model number in the command palette "
+                     "(e.g. ':aimodel 1').")
+
+        # Just show the list for now
+        self.output.update("\n".join(lines))
+        self._set_status("AI: model list shown – wire this into your command menu (':aimodel N').")
 
     def _build_dir_manifest(self, path: Path, max_entries: int = 256) -> str:
         """Return a short text manifest of a directory tree."""
@@ -1340,8 +1368,115 @@ class ShellPilotApp(App):
         self.output.update(panel)
         self._set_status(f"AI: analyzing {kind} {path.name} (stage {stage}/3)")
 
-    # ---------- Background workers ----------
-    
+    def _handle_aimodel(self, target: str) -> None:
+        """
+        Handle `aimodel <id-or-index>` from the command palette.
+        """
+        from shellpilot.ai.models import AI_MODEL_REGISTRY, get_model_path
+        from shellpilot.ai.engine import get_engine, set_engine_model
+
+        target = target.strip()
+        if not target:
+            self._set_status("AI: missing model id/index.")
+            return
+
+        # 1) Resolve target into a model_id
+        model_ids = list(AI_MODEL_REGISTRY.keys())
+
+        if target.isdigit():
+            idx = int(target) - 1
+            if not (0 <= idx < len(model_ids)):
+                self._set_status(f"AI: invalid model index: {target}")
+                return
+            model_id = model_ids[idx]
+        else:
+            if target not in AI_MODEL_REGISTRY:
+                self._set_status(f"AI: unknown model id: {target}")
+                return
+            model_id = target
+
+        spec = AI_MODEL_REGISTRY[model_id]
+        model_path = get_model_path(model_id)
+
+        # 2) If the model file already exists, just switch in-place
+        if model_path.is_file():
+            set_engine_model(model_id)
+            if self.output:
+                self.output.update(
+                    f"[b]AI model switched:[/b] {spec.name} ([code]{model_id}[/code])\n\n"
+                    f"[dim]Path:[/dim] {model_path}\n"
+                    f"[dim]Recommended RAM:[/dim] {spec.recommended_ram_gb} GB+\n\n"
+                    "The next AI analysis will use this model."
+                )
+            self._set_status(f"AI: switched to {spec.name}")
+            return
+
+        # 3) Otherwise, download it in a background thread with progress
+        if self.output:
+            self.output.update(
+                f"[b]Downloading AI model:[/b] {spec.name} ([code]{model_id}[/code])\n\n"
+                f"[dim]Target:[/dim] {model_path}\n"
+                f"[dim]Recommended RAM:[/dim] {spec.recommended_ram_gb} GB+\n\n"
+                "This may take a while on slower connections.\n"
+            )
+
+        self._set_status(f"AI: downloading {spec.name}…")
+
+        def progress_cb(downloaded: int, total: int) -> None:
+            if not self.output or not total:
+                return
+            pct = (downloaded / total) * 100.0
+            mb_done = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+
+            self.call_from_thread(
+                lambda: self.output.update(
+                    f"[b]Downloading AI model:[/b] {spec.name}\n\n"
+                    f"{mb_done:.1f} / {mb_total:.1f} MiB ({pct:.1f}%)\n"
+                    "\n"
+                    "[dim]You can continue browsing while the model downloads.[/dim]"
+                )
+            )
+
+        def worker() -> None:
+            try:
+                engine = get_engine()
+                engine.model_id = model_id
+                engine.model_spec = spec
+                engine.model_path = model_path
+
+                if not model_path.is_file():
+                    engine.download_model(progress_cb=progress_cb)
+
+                set_engine_model(model_id)
+
+                self.call_from_thread(
+                    lambda: (
+                        self._set_status(f"AI: switched to {spec.name}"),
+                        self.output
+                        and self.output.update(
+                            f"[b]AI model ready:[/b] {spec.name} ([code]{model_id}[/code])\n\n"
+                            f"[dim]Path:[/dim] {model_path}\n"
+                            f"[dim]Recommended RAM:[/dim] {spec.recommended_ram_gb} GB+\n\n"
+                            "The next AI analysis will use this model."
+                        )
+                    )
+                )
+            except Exception as exc:
+                self.call_from_thread(
+                    lambda: (
+                        self._set_status(f"AI: failed to download/switch model: {exc}"),
+                        self.output
+                        and self.output.update(
+                            f"[red]AI error:[/red] {exc}\n\n"
+                            "Check your network connection and model URL configuration."
+                        )
+                    )
+                )
+
+        # Kick off the download/switch in a background thread
+        self.call_in_thread(worker)
+
     def _ai_explain_file_worker(self, path: Path, content: str) -> None:
         """Background worker: run the LLM on a file, then post the result."""
         try:
@@ -1457,6 +1592,70 @@ class ShellPilotApp(App):
                     border_style="cyan",
                 )
             )
+
+    def _show_ai_model_list(self) -> None:
+        """
+        Show a list of AI models, their indices, install status, and which one is active.
+        """
+        from shellpilot.ai.models import AI_MODEL_REGISTRY, get_model_path
+        from shellpilot.ai.engine import get_engine
+
+        if not self.output:
+            return
+
+        engine = None
+        current_id = None
+        try:
+            engine = get_engine()
+            current_id = getattr(engine, "model_id", None)
+        except Exception:
+            current_id = None
+
+        model_ids = list(AI_MODEL_REGISTRY.keys())
+
+        lines: list[str] = []
+        lines.append("[b]Available AI models:[/b]")
+        lines.append("")
+
+        for idx, model_id in enumerate(model_ids, start=1):
+            spec = AI_MODEL_REGISTRY[model_id]
+            path = get_model_path(model_id)
+            installed = path.is_file()
+
+            is_current = (model_id == current_id)
+            status_parts = []
+
+            if installed:
+                status_parts.append("[green]installed[/green]")
+            else:
+                status_parts.append("[yellow]not downloaded[/yellow]")
+
+            status_parts.append(f"needs ≥ {spec.recommended_ram_gb} GB RAM")
+
+            if is_current:
+                status_parts.append("[cyan]active[/cyan]")
+
+            status = " | ".join(status_parts)
+
+            # Display line
+            lines.append(
+                f"{idx}. [b]{spec.name}[/b] ([code]{model_id}[/code])\n"
+                f"   {spec.description}\n"
+                f"   [dim]{path}[/dim]\n"
+                f"   {status}\n"
+            )
+
+        lines.append("")
+        lines.append(
+            "To switch models, run [b]aimodel <id-or-index>[/b] from the command palette.\n"
+            "Example: [code]aimodel 1[/code] or [code]aimodel phi-3.5-mini-q4[/code].\n"
+            "If a model is not downloaded, ShellPilot will fetch it and then switch."
+        )
+
+        self.output.update("\n".join(lines))
+        self._set_status("AI: listed available models.")
+
+    # ---------- Background workers ----------
 
     def action_empty_trash(self) -> None:
         """
@@ -1581,11 +1780,23 @@ class ShellPilotApp(App):
                 new_file = fs_browser.touch_entry(parent / name)
                 self._set_status(f"Touched {new_file.name}")
 
+            elif action == "aimodel":
+                target = (result.get("target") or "").strip()
+                if not target:
+                    self._set_status("AI: missing model id/index for 'aimodel'")
+                    return
+                self._handle_aimodel(target)
+                return  # no FS change, no need to refresh browser
+
+            elif action == "aimodels":
+                self._show_ai_model_list()
+                return  # listing only, no refresh
+            
             else:
                 self._set_status(f"Unknown command: {action}")
                 return
 
-            # refresh directory listing
+            # refresh directory listing after FS-changing operations
             self.refresh_browser()
 
         except Exception as exc:

@@ -39,6 +39,16 @@ ACTIONS: list[ActionDefinition] = [
         "touch <filename>",
         "Create an empty file (or update mtime) in the current folder.",
     ),
+    ActionDefinition(
+        "aimodel",
+        "aimodel <id-or-index>",
+        "Switch AI model (by id or numeric index). Downloads if missing.",
+    ),
+    ActionDefinition(
+        "aimodels",
+        "aimodels",
+        "Show available AI models with indices and install status.",
+    ),
 ]
 
 
@@ -90,11 +100,11 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
         with Vertical(id="dialog"):
             yield Static("Command Palette", id="title")
             yield Static(
-                "Type a command (rename, chmod, mkdir, touch)…",
+                "Type a command (rename, chmod, mkdir, touch, aimodel)…",
                 id="subtitle",
             )
             yield Input(
-                placeholder="e.g. rename new_name",
+                placeholder="e.g. rename new_name  or  aimodel 1",
                 id="command-input",
             )
             yield ListView(
@@ -202,6 +212,22 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
             return {
                 "action": "touch",
                 "name": " ".join(args),
+            }
+
+        if cmd == "aimodel":
+            if not args:
+                return None
+            # We don't interpret here; we just pass the raw target
+            # (can be '1', '2', or 'phi-3.5-mini-q4', etc.)
+            return {
+                "action": "aimodel",
+                "target": " ".join(args),
+            }
+        
+        if cmd == "aimodels":
+            # no args; just show the list
+            return {
+                "action": "aimodels",
             }
 
         return None

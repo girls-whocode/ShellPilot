@@ -1,0 +1,20 @@
+[
+  {
+    "id": "phi-3.5-mini-q4",
+    "name": "Phi-3.5-mini (Q4_K_M)",
+    "description": "Fast, low-RAM; good default on laptops and small VMs.",
+    "subdir": "phi-3.5-mini",
+    "filename": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+    "download_url": "https://your-cdn-or-hf/Phi-3.5-mini-instruct-Q4_K_M.gguf",
+    "recommended_ram_gb": 8
+  },
+  {
+    "id": "phi-3.5-small-q4",
+    "name": "Phi-3.5-small (Q4_K_M)",
+    "description": "Slightly heavier model with better reasoning.",
+    "subdir": "phi-3.5-small",
+    "filename": "Phi-3.5-small-instruct-Q4_K_M.gguf",
+    "download_url": "https://your-cdn-or-hf/Phi-3.5-small-instruct-Q4_K_M.gguf",
+    "recommended_ram_gb": 12
+  }
+]
