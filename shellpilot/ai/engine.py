@@ -44,18 +44,17 @@ class AIEngine:
 
         self._llm = Llama(
             model_path=str(self.model_path),
-            n_ctx=4096,
+            n_ctx=4096,      # we don't need 4K+ context for "explain this file"
             n_threads=n_threads,
-            n_gpu_layers=0,  # CPU only
+            n_gpu_layers=0,  # force CPU-only; CUDA isn't wired up
+            n_batch=256,     # 256 is a good balance; bump to 512 if it feels fine
         )
-
-    # ---------- Low-level call helper ----------
 
     def _run(
         self,
         prompt: str,
-        max_tokens: int = 512,
-        temperature: float = 0.2,
+        max_tokens: int = 320,
+        temperature: float = 0.15,
     ) -> str:
         """
         Call the model with a plain prompt and return the text output.
@@ -64,11 +63,15 @@ class AIEngine:
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
-            stop=["</s>"],
+            top_k=40,
+            top_p=0.9,
+            repeat_penalty=1.1,
+            stop=["</s>", "<|end|>", "<|endoftext|>"],
         )
 
         text = result["choices"][0]["text"]
         return text.strip()
+
 
     # ---------- Public helpers ----------
 
@@ -107,7 +110,43 @@ class AIEngine:
             "- A \"Next steps:\" section with 2-3 bullets.\n"
         )
 
-        return self._run(prompt, max_tokens=512, temperature=0.2)
+        return self._run(prompt, max_tokens=320, temperature=0.15)
+
+    def analyze_directory(self, path: Path, manifest: str) -> str:
+        """
+        Ask the model to explain what this directory is, surface anything suspicious,
+        and suggest next investigation commands. Returns Markdown.
+        """
+        prompt = (
+            "You are a senior Linux systems engineer and security analyst. "
+            "You are given a non-recursive manifest of a directory on disk.\n"
+            "Each entry may include:\n"
+            "- file/dir name\n"
+            "- owner and group\n"
+            "- Unix permissions\n"
+            "- size\n"
+            "- modification time\n"
+            "- some heuristic flags\n\n"
+            "Directory path:\n"
+            f"{path}\n\n"
+            f"Manifest:\n{manifest}\n\n"
+            "Your tasks:\n\n"
+            "1. Briefly explain what this directory is *likely* used for\n"
+            "   (based on names, file types, and location in the filesystem).\n"
+            "2. Highlight anything that looks unusual, risky, or potentially malicious.\n"
+            "   - World-writable files\n"
+            "   - suid/sgid binaries\n"
+            "   - strange locations for executables\n"
+            "   - double-extension webshell-style names\n"
+            "   - suspicious naming patterns\n"
+            "3. For each suspicious item, explain *why* it might be risky\n"
+            "   and how an admin could verify whether it's benign.\n"
+            "4. Suggest 5–10 concrete shell commands the admin could run next\n"
+            "   to investigate further (read-only commands only, no destructive actions).\n\n"
+            "Format your answer in Markdown with clear headings, bullet lists, and fenced code blocks for shell commands.\n"
+        )
+
+        return self._run(prompt, max_tokens=320)
 
     def ask(self, question: str, context: Optional[str] = None) -> str:
         """
@@ -118,8 +157,8 @@ class AIEngine:
         ctx_txt = ""
         if context:
             ctx = context
-            if len(ctx) > 6000:
-                ctx = ctx[:6000] + "\n\n[... truncated context ...]\n"
+            if len(ctx) > 8000:
+                ctx = ctx[:8000] + "\n\n[... truncated context ...]\n"
             ctx_txt = f"\n\nContext:\n{ctx}\n"
 
         prompt = (

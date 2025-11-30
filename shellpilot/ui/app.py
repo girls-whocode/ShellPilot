@@ -7,6 +7,7 @@ import json
 import shutil
 import uuid
 import sys
+import threading
 from typing import Any, Optional
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from rich.syntax import Syntax
 from rich.console import Group
 from rich.text import Text
 from rich.panel import Panel
+from rich.markdown import Markdown
 
 try:
     from PIL import Image as PILImage
@@ -22,7 +24,7 @@ except ImportError:
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Static, Footer, Input
+from textual.widgets import Static, Footer, Input, ListView
 from textual.containers import Horizontal, Vertical, VerticalScroll
 
 from shellpilot.core.fs_browser import list_dir  # still used in action menu
@@ -164,6 +166,18 @@ class ShellPilotApp(App):
         except Exception:
             # Don't crash the app if saving session fails.
             pass
+
+    # ---------- Thread helper for background work ----------
+    def call_in_thread(self, func, *args, **kwargs) -> None:
+        """Tiny compatibility shim: run *func* in a background thread.
+
+        Newer Textual versions have App.call_in_thread; older ones don’t.
+        This shim keeps our AI worker code working everywhere.
+        """
+        import threading
+
+        thread = threading.Thread(target=func, args=args, kwargs=kwargs, daemon=True)
+        thread.start()
 
     # --- Utility: bridge helpers used by the action menu ---
     def get_current_entry_path(self) -> Path | None:
@@ -388,16 +402,16 @@ class ShellPilotApp(App):
 
     # ---------- Helpers ----------
     def _show_ai_response(self, title: str, body: str) -> None:
-        """Render AI response in the preview pane."""
-        if not hasattr(self, "preview") or self.preview is None:
-            return
-
+        """Render AI response in the main output panel (middle column)."""
         panel = Panel.fit(
             body,
             title=title,
             border_style="cyan",
         )
-        self.preview.update(panel)
+
+        # Show AI result in the middle OutputPanel so it's always visible
+        if getattr(self, "output", None) is not None:
+            self.output.update(panel)
 
     def _current_dir(self) -> Path:
         if self.file_list:
@@ -1127,55 +1141,235 @@ class ShellPilotApp(App):
                    if restore_path != orig_path else "")
             )
 
-    def action_ai_explain_file(self) -> None:
-        """Use the local AI model to explain the currently selected file."""
-        # 1) Get the selected file from the FileList
-        file_list = getattr(self, "file_list", None)
-        if file_list is None:
-            self._set_status("AI: no file list available")
-            return
+    # ---------- AI helpers ----------
 
-        entry_path = file_list.get_selected_path()
+    def _build_dir_manifest(self, path: Path, max_entries: int = 256) -> str:
+        """Return a short text manifest of a directory tree."""
+        lines: list[str] = []
+        base = path
+
+        for root, dirs, files in os.walk(base):
+            rel_root = os.path.relpath(root, base)
+            rel_root = "." if rel_root == "." else rel_root
+
+            for d in sorted(dirs):
+                if len(lines) >= max_entries:
+                    break
+                entry = d if rel_root == "." else f"{rel_root}/{d}"
+                lines.append(f"[DIR]  {entry}")
+
+            for f in sorted(files):
+                if len(lines) >= max_entries:
+                    break
+                entry = f if rel_root == "." else f"{rel_root}/{f}"
+                lines.append(f"      {entry}")
+
+            if len(lines) >= max_entries:
+                lines.append(f"... (truncated after {max_entries} entries)")
+                break
+
+        return "\n".join(lines) if lines else "(directory is empty)"
+
+    def action_ai_explain_file(self) -> None:
+        """Use the local AI model to explain the selected file or directory."""
+        entry_path = self._get_selected_path()
         if entry_path is None:
-            self._set_status("AI: no file selected")
+            self._set_status("AI: no item selected")
+            if self.output:
+                self.output.update("[b]AI:[/b] No file or directory selected.")
             return
 
         if entry_path.is_dir():
-            self._set_status("AI: works on files, not directories (yet)")
+            # Directory mode
+            try:
+                manifest = self._build_dir_manifest(entry_path)
+            except Exception as exc:
+                self._show_ai_error(f"Failed to scan directory: {exc}")
+                return
+
+            self._set_status(f"AI: analyzing directory {entry_path.name}")
+            if self.output:
+                panel = Panel.fit(
+                    f"[b]AI explain (directory):[/b]\n\n"
+                    f"Analyzing [magenta]{entry_path}[/magenta]...\n\n"
+                    "This may take several seconds on CPU-only mode.\n"
+                    "You can continue browsing while the analysis runs.\n\n"
+                    "[b]Directory manifest (truncated):[/b]\n"
+                    f"{manifest[:2000]}",
+                    title=f"AI: {entry_path.name}",
+                    border_style="cyan",
+                )
+                self.output.update(panel)
+
+            # 1) Show stage 1: directory has been scanned / summarized
+            self._show_ai_progress(entry_path, stage=1)
+
+            # Background worker
+            self.call_in_thread(self._ai_explain_dir_worker, entry_path, manifest)
+
             return
 
-        # 2) Read file content
+        # File mode
         try:
+            # Cap content length to avoid context explosions
             content = entry_path.read_text(encoding="utf-8", errors="ignore")
+            max_chars = 16_000
+            if len(content) > max_chars:
+                content = content[:max_chars]
         except Exception as exc:
-            self._set_status(f"AI: failed to read file: {exc}")
+            self._show_ai_error(f"Failed to read file: {exc}")
             return
 
-        # 3) Initialize engine
+        self._set_status(f"AI: analyzing file {entry_path.name}")
+        if self.output:
+            panel = Panel.fit(
+                f"[b]AI explain (file):[/b]\n\n"
+                f"Analyzing [magenta]{entry_path}[/magenta]...\n\n"
+                "This may take several seconds on CPU-only mode.\n"
+                "You can continue browsing while the analysis runs.",
+                title=f"AI: {entry_path.name}",
+                border_style="cyan",
+            )
+            self.output.update(panel)
+
+        # 2) Stage 1: we now have the content ready for the model
+        self._show_ai_progress(entry_path, stage=1)
+
+        # 3) Kick work to a background thread so the TUI stays responsive
+        self.call_in_thread(self._ai_explain_file_worker, entry_path, content)
+
+    def _show_ai_progress(self, path: Path, stage: int) -> None:
+        """
+        Render a friendly, step-based 'AI is working' panel.
+
+        stage:
+          1 = just finished reading/summarizing
+          2 = currently running the LLM
+          3 = finished and formatting (usually very brief before final output)
+        """
+        if not self.output:
+            return
+
+        is_dir = path.is_dir()
+        kind = "directory" if is_dir else "file"
+
+        def mark(n: int, label: str) -> str:
+            if stage > n:
+                prefix = "✅"
+            elif stage == n:
+                prefix = "⏳"
+            else:
+                prefix = "•"
+            return f"{prefix} [b]Step {n}/3:[/b] {label}"
+
+        lines: list[str] = [
+            f"[b]AI explain ({kind}):[/b] {path}",
+            "",
+            mark(1, "Read and summarize contents"),
+            mark(2, "Analyze with local AI model"),
+            mark(3, "Organize explanation for display"),
+            "",
+            "You can continue browsing files/directories while this runs.",
+        ]
+
+        body = "\n".join(lines)
+
+        from rich.panel import Panel
+        panel = Panel.fit(body, title="AI: working…", border_style="cyan")
+
+        self.output.update(panel)
+        self._set_status(f"AI: analyzing {kind} {path.name} (stage {stage}/3)")
+
+    # ---------- Background workers ----------
+
+    def _ai_explain_file_worker(self, path: Path, content: str) -> None:
+        """Run the file explanation LLM in a background thread."""
         try:
             engine = get_engine()
         except FileNotFoundError as exc:
-            self._set_status(str(exc))
+            self.call_from_thread(self._show_ai_error, str(exc))
             return
         except Exception as exc:
-            self._set_status(f"AI init error: {exc}")
+            self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
             return
 
-        self._set_status(f"AI: analyzing {entry_path.name} ...")
+        # Stage 2: model is actually running now
+        self.call_from_thread(self._show_ai_progress, path, 2)
 
-        # 4) Run inference (blocking for now)
         try:
-            answer = engine.analyze_file(entry_path, content)
+            answer = engine.analyze_file(path, content)
         except Exception as exc:
-            self._set_status(f"AI inference error: {exc}")
+            self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
             return
 
-        # 5) Show result in preview pane
-        self._show_ai_response(
-            title=f"AI: {entry_path.name}",
-            body=answer,
-        )
-        self._set_status(f"AI: analysis complete for {entry_path.name}")
+        # Stage 3: we’re done computing, about to render
+        self.call_from_thread(self._show_ai_progress, path, 3)
+
+        self.call_from_thread(self._show_ai_success, path, answer)
+
+    def _ai_explain_dir_worker(self, path: Path, manifest: str) -> None:
+        """Run the directory explanation LLM in a background thread."""
+        try:
+            engine = get_engine()
+        except FileNotFoundError as exc:
+            self.call_from_thread(self._show_ai_error, str(exc))
+            return
+        except Exception as exc:
+            self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
+            return
+
+        # Stage 2: model running on directory summary
+        self.call_from_thread(self._show_ai_progress, path, 2)
+
+        try:
+            # Prefer a dedicated directory method if the engine has one
+            if hasattr(engine, "analyze_directory"):
+                answer = engine.analyze_directory(path, manifest)
+            else:
+                # Fallback: treat the manifest like a text "file"
+                answer = engine.analyze_file(path, manifest)
+        except Exception as exc:
+            self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
+            return
+        
+        self.call_from_thread(self._show_ai_progress, path, 3)
+        self.call_from_thread(self._show_ai_success, path, answer)
+
+    def _show_ai_error(self, message: str) -> None:
+        """Render an AI-related error in the output pane + status bar."""
+        self._set_status(f"AI: {message}")
+        if self.output:
+            panel = Panel.fit(
+                f"[b]AI error:[/b]\n\n{message}",
+                title="AI",
+                border_style="red",
+            )
+            self.output.update(panel)
+
+    def _show_ai_success(self, path: Path, answer: str) -> None:
+        """Render the AI explanation in the output pane and status bar."""
+        self._set_status(f"AI: analysis complete for {path.name}")
+
+        if self.output:
+            # Use Markdown so lists/headings render nicely
+            md = Markdown(answer)
+            panel = Panel.fit(
+                md,
+                title=f"AI: {path.name}",
+                border_style="cyan",
+            )
+            self.output.update(panel)
+
+        if getattr(self, "preview", None) is not None:
+            # Short mirrored note in the help pane
+            self.preview.update(
+                Panel.fit(
+                    f"AI summary for [magenta]{path.name}[/magenta].\n\n"
+                    "Press [b]a[/b] on another file or directory to analyze again.",
+                    title="AI helper",
+                    border_style="cyan",
+                )
+            )
 
     def action_empty_trash(self) -> None:
         """
