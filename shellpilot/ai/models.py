@@ -8,7 +8,7 @@ import os
 import urllib.request
 
 
-# Base models/ directory under the repo
+# Base models/ directory under the repo root:
 BASE_MODELS_DIR = (
     Path(__file__)
     .resolve()
@@ -17,7 +17,7 @@ BASE_MODELS_DIR = (
 )
 
 # Remote manifest of available models.
-# You can host this on GitHub (raw), your website, etc.
+# Default: your GitHub raw URL, override via env if needed.
 DEFAULT_MODELS_MANIFEST_URL = os.getenv(
     "SHELLPILOT_MODELS_URL",
     "https://raw.githubusercontent.com/girls-whocode/ShellPilot/refs/heads/main/models.json",
@@ -40,6 +40,7 @@ _MODELS_LOADED = False
 
 
 def _load_manifest_from_url(url: str) -> List[dict]:
+    """Fetch models.json from the given URL and parse JSON."""
     with urllib.request.urlopen(url) as resp:
         data = resp.read()
     return json.loads(data.decode("utf-8"))
@@ -47,8 +48,8 @@ def _load_manifest_from_url(url: str) -> List[dict]:
 
 def _load_manifest_local_fallback() -> List[dict]:
     """
-    Optional: local fallback `models.local.json`
-    so things still work offline / if remote is down.
+    Optional local fallback: config/models.local.json.
+    Used if remote fetch fails (offline, GitHub down, bad URL, etc.).
     """
     fallback_path = (
         Path(__file__).resolve().parents[2]
@@ -57,7 +58,8 @@ def _load_manifest_local_fallback() -> List[dict]:
     )
     if fallback_path.is_file():
         return json.loads(fallback_path.read_text(encoding="utf-8"))
-    # Minimal hard-coded fallback so the app never totally breaks
+
+    # Last-ditch hardcoded fallback so AI isn't completely dead.
     return [
         {
             "id": "phi-3.5-mini-q4",
@@ -65,22 +67,22 @@ def _load_manifest_local_fallback() -> List[dict]:
             "description": "Fast, low-RAM; good default on laptops and small VMs.",
             "subdir": "phi-3.5-mini",
             "filename": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-            "download_url": "https://your-domain-or-hf/Phi-3.5-mini-instruct-Q4_K_M.gguf",
+            "download_url": "https://your-cdn-or-hf/Phi-3.5-mini-instruct-Q4_K_M.gguf",
             "recommended_ram_gb": 8,
         }
     ]
 
 
 def _ensure_models_loaded() -> None:
+    """Populate AI_MODEL_REGISTRY from remote manifest (with fallback)."""
     global AI_MODEL_REGISTRY, _MODELS_LOADED
     if _MODELS_LOADED:
         return
 
-    specs_raw: List[dict]
     try:
         specs_raw = _load_manifest_from_url(DEFAULT_MODELS_MANIFEST_URL)
     except Exception:
-        # network down / URL wrong → fallback
+        # Network / URL failure – fall back to local JSON or minimal default
         specs_raw = _load_manifest_local_fallback()
 
     registry: Dict[str, AIModelSpec] = {}
@@ -101,11 +103,13 @@ def _ensure_models_loaded() -> None:
 
 
 def get_model_registry() -> Dict[str, AIModelSpec]:
+    """Public accessor: lazily load and return the model registry."""
     _ensure_models_loaded()
     return AI_MODEL_REGISTRY
 
 
 def get_model_path(model_id: str) -> Path:
+    """Return the on-disk path where this model's GGUF should live."""
     _ensure_models_loaded()
     spec = AI_MODEL_REGISTRY[model_id]
     return BASE_MODELS_DIR / spec.subdir / spec.filename

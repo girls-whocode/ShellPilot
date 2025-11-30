@@ -1159,11 +1159,21 @@ class ShellPilotApp(App):
         if not self.output:
             return
 
-        # Build a numbered list of models
+        # Load registry via the lazy loader
+        registry = get_model_registry()
+        model_ids = list(registry.keys())
+
+        if not model_ids:
+            self.output.update(
+                "[b]AI:[/b] No models found in the registry.\n\n"
+                "Check your models.json or network connectivity."
+            )
+            self._set_status("AI: no models in registry")
+            return
+
         lines = ["[b]Select AI model:[/b]", ""]
-        model_ids = list(AI_MODEL_REGISTRY.keys())
         for idx, model_id in enumerate(model_ids, start=1):
-            spec = AI_MODEL_REGISTRY[model_id]
+            spec = registry[model_id]
             lines.append(
                 f"{idx}. [b]{spec.name}[/b] ({model_id}) "
                 f"- {spec.description} "
@@ -1171,13 +1181,13 @@ class ShellPilotApp(App):
             )
 
         lines.append("")
-        lines.append("Use the [b]:[/b] command palette or config later to make this persistent.")
-        lines.append("For now, enter the model number in the command palette "
-                     "(e.g. ':aimodel 1').")
+        lines.append(
+            "Use the [b]:[/b] command palette to switch:\n"
+            "  [code]: aimodel 1[/code] or [code]: aimodel phi-3.5-mini-q4[/code]."
+        )
 
-        # Just show the list for now
         self.output.update("\n".join(lines))
-        self._set_status("AI: model list shown – wire this into your command menu (':aimodel N').")
+        self._set_status("AI: model list shown – use ': aimodel <id-or-index>'.")
 
     def _build_dir_manifest(self, path: Path, max_entries: int = 256) -> str:
         """Return a short text manifest of a directory tree."""
@@ -1372,7 +1382,6 @@ class ShellPilotApp(App):
         """
         Handle `aimodel <id-or-index>` from the command palette.
         """
-        from shellpilot.ai.models import AI_MODEL_REGISTRY, get_model_path
         from shellpilot.ai.engine import get_engine, set_engine_model
 
         target = target.strip()
@@ -1380,8 +1389,18 @@ class ShellPilotApp(App):
             self._set_status("AI: missing model id/index.")
             return
 
-        # 1) Resolve target into a model_id
-        model_ids = list(AI_MODEL_REGISTRY.keys())
+        # 1) Load registry and resolve target into a model_id
+        registry = get_model_registry()
+        model_ids = list(registry.keys())
+
+        if not model_ids:
+            self._set_status("AI: no models in registry (models.json empty or failed to load).")
+            if self.output:
+                self.output.update(
+                    "[b]AI:[/b] No models available.\n\n"
+                    "Check your models.json or network connectivity."
+                )
+            return
 
         if target.isdigit():
             idx = int(target) - 1
@@ -1390,12 +1409,12 @@ class ShellPilotApp(App):
                 return
             model_id = model_ids[idx]
         else:
-            if target not in AI_MODEL_REGISTRY:
+            if target not in registry:
                 self._set_status(f"AI: unknown model id: {target}")
                 return
             model_id = target
 
-        spec = AI_MODEL_REGISTRY[model_id]
+        spec = registry[model_id]
         model_path = get_model_path(model_id)
 
         # 2) If the model file already exists, just switch in-place
@@ -1597,11 +1616,14 @@ class ShellPilotApp(App):
         """
         Show a list of AI models, their indices, install status, and which one is active.
         """
-        from shellpilot.ai.models import AI_MODEL_REGISTRY, get_model_path
         from shellpilot.ai.engine import get_engine
 
         if not self.output:
             return
+
+        # Ensure registry is loaded
+        registry = get_model_registry()
+        model_ids = list(registry.keys())
 
         engine = None
         current_id = None
@@ -1611,14 +1633,22 @@ class ShellPilotApp(App):
         except Exception:
             current_id = None
 
-        model_ids = list(AI_MODEL_REGISTRY.keys())
-
         lines: list[str] = []
         lines.append("[b]Available AI models:[/b]")
         lines.append("")
 
+        if not model_ids:
+            lines.append("[red]No AI models found in the registry.[/red]")
+            lines.append(
+                "\nCheck your models.json or network connectivity "
+                "(SHELLPILOT_MODELS_URL)."
+            )
+            self.output.update("\n".join(lines))
+            self._set_status("AI: no models to list.")
+            return
+
         for idx, model_id in enumerate(model_ids, start=1):
-            spec = AI_MODEL_REGISTRY[model_id]
+            spec = registry[model_id]
             path = get_model_path(model_id)
             installed = path.is_file()
 
@@ -1637,7 +1667,6 @@ class ShellPilotApp(App):
 
             status = " | ".join(status_parts)
 
-            # Display line
             lines.append(
                 f"{idx}. [b]{spec.name}[/b] ([code]{model_id}[/code])\n"
                 f"   {spec.description}\n"
@@ -1648,7 +1677,8 @@ class ShellPilotApp(App):
         lines.append("")
         lines.append(
             "To switch models, run [b]aimodel <id-or-index>[/b] from the command palette.\n"
-            "Example: [code]aimodel 1[/code] or [code]aimodel phi-3.5-mini-q4[/code].\n"
+            "Example: [code]: aimodel 1[/code] or "
+            "[code]: aimodel phi-3.5-mini-q4[/code].\n"
             "If a model is not downloaded, ShellPilot will fetch it and then switch."
         )
 
