@@ -1,0 +1,81 @@
+Screen {
+    layout: vertical;
+    background: #05060a;
+    color: #e0e0f0;
+}
+
+/* Main row: left | output | help */
+Horizontal {
+    height: 1fr;
+}
+
+/* LEFT PANE LAYOUT */
+
+#left-pane {
+    width: 1fr;          /* was 30% */
+    min-width: 24;
+    border-right: solid #444444;
+}
+
+#breadcrumb {
+    padding: 0 1;
+    height: 1;
+    color: #a0a0ff;
+}
+
+#search {
+    height: 1;              /* 1 row tall */
+    min-height: 1;
+    padding: 0 1;           /* no vertical padding, just a bit left/right */
+    margin-bottom: 1;       /* small gap before the file list */
+    border: none;           /* optional: remove border if it feels bulky */
+    content-align: left middle;
+}
+
+#search-bar {
+    display: none;
+}
+
+#search-bar.-visible {
+    display: block;
+}
+
+#files {
+    height: 1fr;
+}
+
+/* MIDDLE + RIGHT PANES */
+
+#output-container {
+    width: 1fr;          /* was 45% */
+    min-width: 32;
+    padding: 1 2;
+    border-right: solid #333333;
+}
+
+#preview-container {
+    width: 1fr;          /* was 25% */
+    min-width: 24;
+    padding: 1 2;
+}
+
+CommandPreview {
+    text-opacity: 0.95;
+}
+
+OutputPanel {
+    text-opacity: 0.95;
+}
+
+/* STATUS BAR */
+
+#status {
+    height: 1;
+    padding: 0 1;
+    border-top: solid #333333;
+    color: #bbbbff;
+}
+
+Footer {
+    dock: bottom;
+}

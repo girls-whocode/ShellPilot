@@ -1,0 +1,17 @@
+ai_starter.md
+_pycache_/
+__pycache__/
+.ipynb_checkpoints/
+.vscode/
+.env
+.env.*
+.DS_Store
+.idea/
+*.log
+build/
+dist/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.coverage
+/models/
