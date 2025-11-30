@@ -3,11 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 import os
-
+import urllib.request  # needed for download_model
+import urllib.request
+import urllib.error
 from llama_cpp import Llama
-from shellpilot.ai.models import get_model_registry, get_model_path
 
-# Default model location:
+from shellpilot.ai.models import get_model_registry, get_model_path
+from shellpilot.config import load_config
+
+# Default model location (legacy, not really used now that we have a registry,
+# but kept here in case you want a hard fallback somewhere else):
 # ShellPilot/
 #   shellpilot/
 #   models/
@@ -22,6 +27,7 @@ _DEFAULT_MODEL = (
     / "Phi-3.5-mini-instruct-Q4_K_M.gguf"
 )
 
+
 class AIEngine:
     """
     Thin wrapper around llama-cpp for ShellPilot.
@@ -32,12 +38,15 @@ class AIEngine:
     """
 
     def __init__(self, model_id: str = "phi-3.5-mini-q4") -> None:
-        if model_id not in AI_MODEL_REGISTRY:
+        # Use the lazy-loaded registry instead of AI_MODEL_REGISTRY
+        registry = get_model_registry()
+
+        if model_id not in registry:
             raise ValueError(f"Unknown AI model id: {model_id}")
 
         self.model_id = model_id
-        self.model_spec = AI_MODEL_REGISTRY[model_id]
-        self.model_path = get_model_path(model_id)
+        self.model_spec = registry[model_id]
+        self.model_path: Path = get_model_path(model_id)
 
         # CPU-only setup for now.
         n_threads = max(1, (os.cpu_count() or 4))
@@ -82,7 +91,6 @@ class AIEngine:
         text = result["choices"][0]["text"]
         return text.strip()
 
-
     # ---------- Public helpers ----------
 
     def download_model(self, progress_cb=None) -> None:
@@ -100,20 +108,43 @@ class AIEngine:
         url = self.model_spec.download_url
         tmp_path = self.model_path.with_suffix(self.model_path.suffix + ".part")
 
-        with urllib.request.urlopen(url) as resp, open(tmp_path, "wb") as out:
-            total = resp.length or 0
-            downloaded = 0
+        # Token resolution order:
+        # 1) Environment variables (HF_TOKEN / HUGGINGFACEHUB_API_TOKEN)
+        # 2) AppConfig (Settings screen)
+        token = (
+            os.getenv("HF_TOKEN")
+            or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+            or load_config().hf_token
+        )
 
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                if progress_cb and total:
-                    progress_cb(downloaded, total)
+        req = urllib.request.Request(url)
+        if token and "huggingface.co" in url:
+            req.add_header("Authorization", f"Bearer {token}")
 
-        tmp_path.rename(self.model_path)
+        try:
+            with urllib.request.urlopen(req) as resp, open(tmp_path, "wb") as out:
+                total = getattr(resp, "length", None) or 0
+                downloaded = 0
+
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb and total:
+                        progress_cb(downloaded, total)
+
+            tmp_path.rename(self.model_path)
+
+        except urllib.error.HTTPError as e:
+            # This is where 401/403/etc. show up
+            raise RuntimeError(
+                f"Model download failed ({e.code} {e.reason}). "
+                "If this is a Hugging Face model, make sure the URL is correct and "
+                "that your token is set in Settings (or HF_TOKEN env) and you "
+                "have accepted the model's license."
+            ) from e
 
     def switch_model(self, model_id: str) -> None:
         """
@@ -124,11 +155,13 @@ class AIEngine:
         if model_id == self.model_id:
             return  # already on this model
 
-        if model_id not in AI_MODEL_REGISTRY:
+        registry = get_model_registry()
+
+        if model_id not in registry:
             raise ValueError(f"Unknown AI model id: {model_id}")
 
         self.model_id = model_id
-        self.model_spec = AI_MODEL_REGISTRY[model_id]
+        self.model_spec = registry[model_id]
         self.model_path = get_model_path(model_id)
 
         if not self.model_path.is_file():
@@ -242,6 +275,7 @@ class AIEngine:
 
 _engine: Optional[AIEngine] = None
 _current_model_id = "phi-3.5-mini-q4"
+
 
 def get_engine() -> AIEngine:
     """

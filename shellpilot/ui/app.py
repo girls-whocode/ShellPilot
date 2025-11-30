@@ -40,6 +40,8 @@ from shellpilot.utils.log_highlighter import LogHighlighter
 from shellpilot.core.search import SearchQuery, SearchMode, FileTypeFilter, fuzzy_score
 from shellpilot.ai.engine import get_engine, set_engine_model
 from shellpilot.ai.models import get_model_registry, get_model_path
+from shellpilot.ui.settings import SettingsScreen
+from shellpilot.config import load_config, save_config, AppConfig
 
 from shellpilot.core.git import is_git_repo, get_git_status
 from shellpilot.ui.widgets import FileList, CommandPreview, OutputPanel
@@ -88,13 +90,13 @@ class ShellPilotApp(App):
         ("h", "go_home", "Home (~)"),
         ("t", "go_trash", "Trash"),
         ("delete", "trash_selected", "Move to trash"),
-        # Trash-specific actions (shown only in trash view)
         Binding("r", "restore_from_trash", "Restore", show=False),
         Binding("E", "empty_trash", "Empty trash", show=False),
         ("/", "focus_search", "Filter"),
         ("ctrl+b", "add_bookmark", "Bookmark dir"),
         ("ctrl+j", "next_bookmark", "Next bookmark"),
         ("e", "open_in_editor", "Edit file"),
+        Binding("ctrl+comma", "open_settings", "Settings"),
         ("?", "toggle_help", "Toggle help"),
         Binding("a", "ai_explain_file", "AI Explain", show=True),
         Binding(":", "open_action_menu", "Command"),
@@ -403,6 +405,38 @@ class ShellPilotApp(App):
             self.refresh(layout=True)
 
         self._update_footer_bindings_visibility()
+
+    def action_open_settings(self) -> None:
+        """Open the Settings dialog (HF token, etc.)."""
+        self.push_screen(SettingsScreen(), self._handle_settings_result)
+
+    def _handle_settings_result(self, result: dict[str, Any] | None) -> None:
+        """Callback when Settings dialog is dismissed."""
+        if result is None:
+            self._set_status("Settings: cancelled.")
+            return
+
+        # Load current config, update, save
+        cfg = load_config()
+        hf_token = result.get("hf_token")
+
+        cfg.hf_token = hf_token
+        save_config(cfg)
+
+        masked = (
+            f"{hf_token[:6]}…{hf_token[-4:]}"
+            if hf_token and len(hf_token) > 10
+            else ("<empty>" if not hf_token else "********")
+        )
+
+        if self.output:
+            self.output.update(
+                "[b]Settings updated[/b]\n\n"
+                f"Hugging Face token: {masked}\n\n"
+                "[dim]Token is stored locally in your ShellPilot config file.[/dim]"
+            )
+
+        self._set_status("Settings saved (Hugging Face token updated).")
 
     # ---------- Helpers ----------
     def _show_ai_response(self, title: str, body: str) -> None:
