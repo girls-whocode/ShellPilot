@@ -41,6 +41,7 @@ class AIEngine:
 
         # CPU-only setup for now.
         n_threads = max(1, (os.cpu_count() or 4))
+        self.n_threads = n_threads
 
         self._llm = Llama(
             model_path=str(self.model_path),
@@ -55,7 +56,7 @@ class AIEngine:
     def _run(
         self,
         prompt: str,
-        max_tokens: int = 768,   # was 320
+        max_tokens: int = 2048,   # was 320
         temperature: float = 0.15,
     ) -> str:
         """
@@ -148,7 +149,7 @@ class AIEngine:
             "Format your answer in Markdown with clear headings, bullet lists, and fenced code blocks for shell commands.\n"
         )
 
-        return self._run(prompt, max_tokens=1024)
+        return self._run(prompt, max_tokens=2048, temperature=0.2)
 
     def ask(self, question: str, context: Optional[str] = None) -> str:
         """
@@ -159,8 +160,8 @@ class AIEngine:
         ctx_txt = ""
         if context:
             ctx = context
-            if len(ctx) > 12000:
-                ctx = ctx[:12000] + "\n\n[... truncated context ...]\n"
+            if len(ctx) > 24000:
+                ctx = ctx[:24000] + "\n\n[... truncated context ...]\n"
             ctx_txt = f"\n\nContext:\n{ctx}\n"
 
         prompt = (
@@ -173,7 +174,7 @@ class AIEngine:
             "explain briefly what they do.\n"
         )
 
-        return self._run(prompt, max_tokens=768, temperature=0.3)
+        return self._run(prompt, max_tokens=2048, temperature=0.3)
 
 
 # ---------- Singleton accessor ----------

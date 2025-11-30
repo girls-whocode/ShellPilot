@@ -95,8 +95,8 @@ class ShellPilotApp(App):
         ("ctrl+j", "next_bookmark", "Next bookmark"),
         ("e", "open_in_editor", "Edit file"),
         ("?", "toggle_help", "Toggle help"),
-        Binding(":", "open_action_menu", "Command"),
         Binding("a", "ai_explain_file", "AI Explain", show=True),
+        Binding(":", "open_action_menu", "Command"),
     ]
 
     def __init__(self, start_path: Optional[Path] = None, **kwargs):
@@ -1291,17 +1291,30 @@ class ShellPilotApp(App):
         is_dir = path.is_dir()
         kind = "directory" if is_dir else "file"
 
+        threads = get_engine().n_threads
+
         def mark(n: int, label: str) -> str:
             if stage > n:
                 prefix = "✅"
             elif stage == n:
                 prefix = "⏳"
             else:
-                prefix = "•"
+                prefix = " •"
             return f"{prefix} [b]Step {n}/3:[/b] {label}"
+
+        # Optional: playful but professional indicators
+        if threads >= 12:
+            thread_status = f"🔥 Using {threads} CPU threads (high performance)"
+        elif threads >= 8:
+            thread_status = f"🚀 Using {threads} CPU threads"
+        elif threads >= 4:
+            thread_status = f"⚙️  Using {threads} CPU threads"
+        else:
+            thread_status = f"🐢 Using {threads} CPU thread (limited mode)"
 
         lines: list[str] = [
             f"[b]AI explain ({kind}):[/b] {path}",
+            f"[dim]{thread_status}[/dim]",     # <--- NEW LINE ADDED HERE
             "",
             mark(1, "Read and summarize contents"),
             mark(2, "Analyze with local AI model"),
