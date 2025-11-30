@@ -39,7 +39,7 @@ from shellpilot.utils.ls_colors import style_for_path
 from shellpilot.utils.log_highlighter import LogHighlighter
 from shellpilot.core.search import SearchQuery, SearchMode, FileTypeFilter, fuzzy_score
 from shellpilot.ai.engine import get_engine, set_engine_model
-from shellpilot.ai.models import AI_MODEL_REGISTRY, get_model_path
+from shellpilot.ai.models import get_model_registry, get_model_path
 
 from shellpilot.core.git import is_git_repo, get_git_status
 from shellpilot.ui.widgets import FileList, CommandPreview, OutputPanel

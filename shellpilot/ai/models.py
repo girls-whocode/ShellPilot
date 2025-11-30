@@ -20,7 +20,7 @@ BASE_MODELS_DIR = (
 # You can host this on GitHub (raw), your website, etc.
 DEFAULT_MODELS_MANIFEST_URL = os.getenv(
     "SHELLPILOT_MODELS_URL",
-    "https://your-domain-or-github/raw/main/shellpilot-models.json",
+    "https://raw.githubusercontent.com/girls-whocode/ShellPilot/refs/heads/main/models.json",
 )
 
 

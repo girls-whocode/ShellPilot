@@ -5,7 +5,7 @@ from typing import Optional
 import os
 
 from llama_cpp import Llama
-from .models import AI_MODEL_REGISTRY, get_model_path
+from shellpilot.ai.models import get_model_registry, get_model_path
 
 # Default model location:
 # ShellPilot/
