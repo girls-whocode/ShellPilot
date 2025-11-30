@@ -44,16 +44,18 @@ class AIEngine:
 
         self._llm = Llama(
             model_path=str(self.model_path),
-            n_ctx=4096,      # we don't need 4K+ context for "explain this file"
+            # If your model was quantized with larger context, 8192 is a nice upgrade.
+            # If not, leaving 4096 is fine – no need to force it.
+            n_ctx=8192,
             n_threads=n_threads,
-            n_gpu_layers=0,  # force CPU-only; CUDA isn't wired up
-            n_batch=256,     # 256 is a good balance; bump to 512 if it feels fine
+            n_gpu_layers=0,   # CPU-only
+            n_batch=512,      # better throughput for longer generations
         )
 
     def _run(
         self,
         prompt: str,
-        max_tokens: int = 320,
+        max_tokens: int = 768,   # was 320
         temperature: float = 0.15,
     ) -> str:
         """
@@ -82,7 +84,7 @@ class AIEngine:
         """
         # Keep prompt size under control for huge files
         snippet = content
-        max_chars = 8000
+        max_chars = 16000   # was 8000 – allow ~2x more context
         if len(snippet) > max_chars:
             snippet = snippet[:max_chars]
             snippet += "\n\n[... truncated by ShellPilot for length ...]\n"
@@ -110,7 +112,7 @@ class AIEngine:
             "- A \"Next steps:\" section with 2-3 bullets.\n"
         )
 
-        return self._run(prompt, max_tokens=320, temperature=0.15)
+        return self._run(prompt, max_tokens=1024, temperature=0.15)
 
     def analyze_directory(self, path: Path, manifest: str) -> str:
         """
@@ -146,7 +148,7 @@ class AIEngine:
             "Format your answer in Markdown with clear headings, bullet lists, and fenced code blocks for shell commands.\n"
         )
 
-        return self._run(prompt, max_tokens=320)
+        return self._run(prompt, max_tokens=1024)
 
     def ask(self, question: str, context: Optional[str] = None) -> str:
         """
@@ -157,8 +159,8 @@ class AIEngine:
         ctx_txt = ""
         if context:
             ctx = context
-            if len(ctx) > 8000:
-                ctx = ctx[:8000] + "\n\n[... truncated context ...]\n"
+            if len(ctx) > 12000:
+                ctx = ctx[:12000] + "\n\n[... truncated context ...]\n"
             ctx_txt = f"\n\nContext:\n{ctx}\n"
 
         prompt = (
@@ -171,7 +173,7 @@ class AIEngine:
             "explain briefly what they do.\n"
         )
 
-        return self._run(prompt, max_tokens=384, temperature=0.3)
+        return self._run(prompt, max_tokens=768, temperature=0.3)
 
 
 # ---------- Singleton accessor ----------

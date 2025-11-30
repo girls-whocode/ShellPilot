@@ -87,6 +87,9 @@ class ShellPilotApp(App):
         ("h", "go_home", "Home (~)"),
         ("t", "go_trash", "Trash"),
         ("delete", "trash_selected", "Move to trash"),
+        # Trash-specific actions (shown only in trash view)
+        Binding("r", "restore_from_trash", "Restore", show=False),
+        Binding("E", "empty_trash", "Empty trash", show=False),
         ("/", "focus_search", "Filter"),
         ("ctrl+b", "add_bookmark", "Bookmark dir"),
         ("ctrl+j", "next_bookmark", "Next bookmark"),
@@ -521,10 +524,15 @@ class ShellPilotApp(App):
             self._last_command = cmd
             self.preview.show_command(cmd)
 
-        if self.output:
-            self.output.update(
-                "(Select a file to preview, or press Enter to list this directory)"
-            )
+        # IMPORTANT:
+        # Don't touch the output panel here.
+        # We want AI analysis or previous command output to persist
+        # even when the user navigates to a different directory.
+        #
+        # The output will be updated only when the user:
+        # - presses Enter (action_run_command)
+        # - runs AI explain (action_ai_explain_file)
+        # - previews a file / log / image, etc.
 
         self._set_status(f"In directory: {path}")
         self._save_session()
@@ -1171,81 +1179,111 @@ class ShellPilotApp(App):
         return "\n".join(lines) if lines else "(directory is empty)"
 
     def action_ai_explain_file(self) -> None:
-        """Use the local AI model to explain the selected file or directory."""
+        """Use the local AI model to explain the currently selected file or directory."""
+        # Use our own helper so we don't depend on FileList internals
         entry_path = self._get_selected_path()
         if entry_path is None:
-            self._set_status("AI: no item selected")
+            self._set_status("AI: no file or directory selected")
             if self.output:
-                self.output.update("[b]AI:[/b] No file or directory selected.")
+                self.output.update(
+                    "[b]AI:[/b] No file or directory selected. "
+                    "Highlight something in the file list and press [b]a[/b] again."
+                )
             return
 
+        # --- DIRECTORY PATH ---------------------------------------------------
         if entry_path.is_dir():
-            # Directory mode
             try:
-                manifest = self._build_dir_manifest(entry_path)
+                # Use manifest builder so we keep prompts under control
+                manifest = self._build_dir_manifest(entry_path, max_entries=200)
             except Exception as exc:
-                self._show_ai_error(f"Failed to scan directory: {exc}")
+                self._show_ai_error(f"Failed to inspect directory: {exc}")
                 return
 
-            self._set_status(f"AI: analyzing directory {entry_path.name}")
-            if self.output:
-                panel = Panel.fit(
-                    f"[b]AI explain (directory):[/b]\n\n"
-                    f"Analyzing [magenta]{entry_path}[/magenta]...\n\n"
-                    "This may take several seconds on CPU-only mode.\n"
-                    "You can continue browsing while the analysis runs.\n\n"
-                    "[b]Directory manifest (truncated):[/b]\n"
-                    f"{manifest[:2000]}",
-                    title=f"AI: {entry_path.name}",
-                    border_style="cyan",
+            # Basic stats for the 'AI is working on…' line
+            try:
+                entries = list(entry_path.iterdir())
+                total = len(entries)
+                n_dirs = sum(1 for p in entries if p.is_dir())
+                n_files = total - n_dirs
+
+                maybe_exec = 0
+                for p in entries:
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    mode = st.st_mode
+                    if mode & (statmod.S_IXUSR | statmod.S_ISUID | statmod.S_ISGID):
+                        maybe_exec += 1
+
+                detail = (
+                    f"Scanned {total} items in this directory: "
+                    f"{n_files} files, {n_dirs} subdirectories; "
+                    f"{maybe_exec} executable / potentially sensitive entries."
                 )
-                self.output.update(panel)
+            except Exception:
+                detail = "Scanning directory contents and building a short manifest…"
 
-            # 1) Show stage 1: directory has been scanned / summarized
-            self._show_ai_progress(entry_path, stage=1)
+            # Stage 1: finished scanning/summarizing
+            self._show_ai_progress(entry_path, stage=1, detail=detail)
 
-            # Background worker
-            self.call_in_thread(self._ai_explain_dir_worker, entry_path, manifest)
-
+            # Kick background analysis
+            self.call_in_thread(
+                self._ai_explain_directory_worker,
+                entry_path,
+                manifest,
+            )
             return
 
-        # File mode
+        # --- FILE PATH --------------------------------------------------------
+        # For files, read content (with safety limits) and send to worker
         try:
-            # Cap content length to avoid context explosions
-            content = entry_path.read_text(encoding="utf-8", errors="ignore")
-            max_chars = 16_000
-            if len(content) > max_chars:
-                content = content[:max_chars]
+            # You can tune this limit if needed
+            max_bytes = 512 * 1024  # 512 KB
+            raw = entry_path.read_bytes()
+            if len(raw) > max_bytes:
+                raw = raw[:max_bytes]
+            # Try UTF-8 first, fall back to replacement
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                content = raw.decode("utf-8", errors="replace")
+        except PermissionError:
+            self._show_ai_error(
+                f"Permission denied reading file: {entry_path}"
+            )
+            return
         except Exception as exc:
             self._show_ai_error(f"Failed to read file: {exc}")
             return
 
-        self._set_status(f"AI: analyzing file {entry_path.name}")
-        if self.output:
-            panel = Panel.fit(
-                f"[b]AI explain (file):[/b]\n\n"
-                f"Analyzing [magenta]{entry_path}[/magenta]...\n\n"
-                "This may take several seconds on CPU-only mode.\n"
-                "You can continue browsing while the analysis runs.",
-                title=f"AI: {entry_path.name}",
-                border_style="cyan",
-            )
-            self.output.update(panel)
+        approx_chars = len(content)
+        detail = (
+            f"Read ~{approx_chars} characters from this file; "
+            "preparing prompt for the local AI model…"
+        )
 
-        # 2) Stage 1: we now have the content ready for the model
-        self._show_ai_progress(entry_path, stage=1)
+        # Stage 1: finished reading the file
+        self._show_ai_progress(entry_path, stage=1, detail=detail)
 
-        # 3) Kick work to a background thread so the TUI stays responsive
-        self.call_in_thread(self._ai_explain_file_worker, entry_path, content)
+        # Kick the background worker
+        self.call_in_thread(
+            self._ai_explain_file_worker,
+            entry_path,
+            content,
+        )
 
-    def _show_ai_progress(self, path: Path, stage: int) -> None:
+    def _show_ai_progress(self, path: Path, stage: int, detail: str | None = None) -> None:
         """
         Render a friendly, step-based 'AI is working' panel.
 
         stage:
           1 = just finished reading/summarizing
           2 = currently running the LLM
-          3 = finished and formatting (usually very brief before final output)
+          3 = finished and formatting (usually very brief)
+        detail:
+          Optional human-readable line about what we're doing right now.
         """
         if not self.output:
             return
@@ -1268,6 +1306,15 @@ class ShellPilotApp(App):
             mark(1, "Read and summarize contents"),
             mark(2, "Analyze with local AI model"),
             mark(3, "Organize explanation for display"),
+        ]
+
+        if detail:
+            lines += [
+                "",
+                f"[dim]{detail}[/dim]",
+            ]
+
+        lines += [
             "",
             "You can continue browsing files/directories while this runs.",
         ]
@@ -1281,9 +1328,9 @@ class ShellPilotApp(App):
         self._set_status(f"AI: analyzing {kind} {path.name} (stage {stage}/3)")
 
     # ---------- Background workers ----------
-
+    
     def _ai_explain_file_worker(self, path: Path, content: str) -> None:
-        """Run the file explanation LLM in a background thread."""
+        """Background worker: run the LLM on a file, then post the result."""
         try:
             engine = get_engine()
         except FileNotFoundError as exc:
@@ -1293,22 +1340,40 @@ class ShellPilotApp(App):
             self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
             return
 
-        # Stage 2: model is actually running now
-        self.call_from_thread(self._show_ai_progress, path, 2)
+        # Stage 2a: model is loaded / ready
+        self.call_from_thread(
+            self._show_ai_progress,
+            path,
+            2,
+            "Loaded local AI model; building prompt from file contents…",
+        )
 
         try:
+            # Optional: mention approximate prompt size
+            approx_chars = len(content)
+            detail = (
+                f"Feeding ~{approx_chars} characters of source text into the model "
+                "and generating a structured explanation…"
+            )
+            self.call_from_thread(self._show_ai_progress, path, 2, detail)
+
             answer = engine.analyze_file(path, content)
         except Exception as exc:
             self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
             return
 
-        # Stage 3: we’re done computing, about to render
-        self.call_from_thread(self._show_ai_progress, path, 3)
+        # Stage 3: post-processing
+        self.call_from_thread(
+            self._show_ai_progress,
+            path,
+            3,
+            "Post-processing the model output into a concise explanation…",
+        )
 
         self.call_from_thread(self._show_ai_success, path, answer)
 
-    def _ai_explain_dir_worker(self, path: Path, manifest: str) -> None:
-        """Run the directory explanation LLM in a background thread."""
+    def _ai_explain_directory_worker(self, path: Path, manifest: str) -> None:
+        """Background worker: run the LLM on a directory manifest."""
         try:
             engine = get_engine()
         except FileNotFoundError as exc:
@@ -1318,21 +1383,30 @@ class ShellPilotApp(App):
             self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
             return
 
-        # Stage 2: model running on directory summary
-        self.call_from_thread(self._show_ai_progress, path, 2)
+        # Stage 2: actively analyzing the directory
+        approx_lines = manifest.count("\n") + 1
+        self.call_from_thread(
+            self._show_ai_progress,
+            path,
+            2,
+            f"Analyzing a manifest of ~{approx_lines} entries; "
+            "looking for structure, notable files, and potentially risky items.",
+        )
 
         try:
-            # Prefer a dedicated directory method if the engine has one
-            if hasattr(engine, "analyze_directory"):
-                answer = engine.analyze_directory(path, manifest)
-            else:
-                # Fallback: treat the manifest like a text "file"
-                answer = engine.analyze_file(path, manifest)
+            answer = engine.analyze_directory(path, manifest)
         except Exception as exc:
             self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
             return
-        
-        self.call_from_thread(self._show_ai_progress, path, 3)
+
+        # Stage 3: formatting
+        self.call_from_thread(
+            self._show_ai_progress,
+            path,
+            3,
+            "Organizing directory analysis into sections (purpose, key files, risks)…",
+        )
+
         self.call_from_thread(self._show_ai_success, path, answer)
 
     def _show_ai_error(self, message: str) -> None:
