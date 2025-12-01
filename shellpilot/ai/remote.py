@@ -12,10 +12,8 @@ from shellpilot.ai.config import load_ai_config
 
 ProviderType = Literal["gpt", "gemini", "copilot"]
 
-
 class RemoteAIError(RuntimeError):
     pass
-
 
 def _build_file_prompt(path: Path, content: str) -> str:
     # Mirror the semantics of AIEngine.analyze_file
@@ -27,16 +25,15 @@ def _build_file_prompt(path: Path, content: str) -> str:
         "2. Summarize what it does or contains in clear bullet points.\n"
         "3. If it looks like a config or script, call out any obvious issues, "
         "risks, or misconfigurations.\n"
-        "4. Suggest 2–3 next steps the user might take to debug or improve things.\n\n"
+        "4. Suggest 2-3 next steps the user might take to debug or improve things.\n\n"
         f"File path: {path}\n\n"
         "File content snippet (may be truncated):\n\n"
         f"{content}\n\n"
         "Respond in Markdown:\n"
         "- Heading with guessed file type\n"
-        "- 3–7 bullet points summarizing\n"
-        "- 'Next steps:' section with 2–3 bullets.\n"
+        "- 3-7 bullet points summarizing\n"
+        "- 'Next steps:' section with 2-3 bullets.\n"
     )
-
 
 def _build_dir_prompt(path: Path, manifest: str) -> str:
     return (
@@ -53,7 +50,7 @@ def _build_dir_prompt(path: Path, manifest: str) -> str:
         "1. Explain in plain language what this directory most likely is used for.\n"
         "2. Call out particularly interesting or risky entries (world-writable files, "
         "setuid/setgid binaries, SSH keys, strange scripts, etc.).\n"
-        "3. Suggest 3–5 concrete next shell commands the user could run to investigate "
+        "3. Suggest 3-5 concrete next shell commands the user could run to investigate "
         "further.\n\n"
         f"Directory path: {path}\n\n"
         "Manifest:\n"
@@ -64,9 +61,7 @@ def _build_dir_prompt(path: Path, manifest: str) -> str:
         "- 'Suggested next commands'.\n"
     )
 
-
 # -------------------- OpenAI GPT --------------------
-
 
 def _call_openai(prompt: str) -> str:
     cfg = load_ai_config()
@@ -118,9 +113,7 @@ def _call_openai(prompt: str) -> str:
     except Exception as exc:
         raise RemoteAIError(f"Unexpected OpenAI response format: {exc}") from exc
 
-
 # -------------------- Google Gemini --------------------
-
 
 def _call_gemini(prompt: str) -> str:
     cfg = load_ai_config()
@@ -156,9 +149,7 @@ def _call_gemini(prompt: str) -> str:
     except Exception as exc:
         raise RemoteAIError(f"Unexpected Gemini response format: {exc}") from exc
 
-
 # -------------------- GitHub Copilot (stub / customizable) --------------------
-
 
 def _call_copilot(prompt: str) -> str:
     """
@@ -173,9 +164,7 @@ def _call_copilot(prompt: str) -> str:
         "Edit shellpilot/ai/remote.py::_call_copilot() to point at your Copilot gateway."
     )
 
-
 # -------------------- Public entrypoints --------------------
-
 
 def analyze_file_remote(provider: ProviderType, path: Path, content: str) -> str:
     prompt = _build_file_prompt(path, content)
@@ -186,7 +175,6 @@ def analyze_file_remote(provider: ProviderType, path: Path, content: str) -> str
     if provider == "copilot":
         return _call_copilot(prompt)
     raise RemoteAIError(f"Unsupported remote provider: {provider}")
-
 
 def analyze_directory_remote(provider: ProviderType, path: Path, manifest: str) -> str:
     prompt = _build_dir_prompt(path, manifest)
