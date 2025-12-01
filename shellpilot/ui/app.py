@@ -8,6 +8,7 @@ import shutil
 import uuid
 import sys
 import threading
+import time
 from typing import Any, Optional
 from datetime import datetime
 
@@ -42,7 +43,6 @@ from shellpilot.ai.engine import get_engine, set_engine_model
 from shellpilot.ai.models import get_model_registry, get_model_path
 from shellpilot.ui.settings import SettingsScreen
 from shellpilot.config import load_config, save_config, AppConfig
-
 from shellpilot.core.git import is_git_repo, get_git_status
 from shellpilot.ui.widgets import FileList, CommandPreview, OutputPanel
 from shellpilot.utils.preview import (
@@ -52,6 +52,11 @@ from shellpilot.utils.preview import (
     hex_dump,
     language_for_path,
     pillow_rich_image,
+)
+from shellpilot.ai.config import (
+    load_ai_config,
+    save_ai_config,
+    set_provider_and_key,
 )
 
 log_highlighter = LogHighlighter()
@@ -234,6 +239,17 @@ class ShellPilotApp(App):
             full = self._base_status
 
         self.status.update(full)
+
+    def _show_ai_timing(self, entry_path: Path, label: str, started_at: float) -> None:
+        """Display how long an AI task took for a given path."""
+        elapsed = time.perf_counter() - started_at
+        msg = f"🤖 {label} for [b]{entry_path.name}[/b] finished in {elapsed:.2f}s"
+
+        # Only touch the status bar, not the output panel
+        self._set_status(msg)
+
+        # If you *really* want it logged, you could later add a log panel
+        # or a non-destructive append method. For now, do nothing to self.output.
 
     # ---------- Trash helpers ----------
     def _init_trash_dir(self) -> tuple[Path, Path]:
@@ -450,6 +466,15 @@ class ShellPilotApp(App):
         # Show AI result in the middle OutputPanel so it's always visible
         if getattr(self, "output", None) is not None:
             self.output.update(panel)
+
+    def _mask_api_key(self, key: str | None) -> str:
+        """Return a human-friendly masked version of an API key."""
+        if not key:
+            return "<not set>"
+        key = str(key)
+        if len(key) <= 8:
+            return "********"
+        return f"{key[:4]}…{key[-4:]}"
 
     def _current_dir(self) -> Path:
         if self.file_list:
@@ -1252,7 +1277,6 @@ class ShellPilotApp(App):
 
     def action_ai_explain_file(self) -> None:
         """Use the local AI model to explain the currently selected file or directory."""
-        # Use our own helper so we don't depend on FileList internals
         entry_path = self._get_selected_path()
         if entry_path is None:
             self._set_status("AI: no file or directory selected")
@@ -1266,13 +1290,11 @@ class ShellPilotApp(App):
         # --- DIRECTORY PATH ---------------------------------------------------
         if entry_path.is_dir():
             try:
-                # Use manifest builder so we keep prompts under control
                 manifest = self._build_dir_manifest(entry_path, max_entries=200)
             except Exception as exc:
                 self._show_ai_error(f"Failed to inspect directory: {exc}")
                 return
 
-            # Basic stats for the 'AI is working on…' line
             try:
                 entries = list(entry_path.iterdir())
                 total = len(entries)
@@ -1300,23 +1322,22 @@ class ShellPilotApp(App):
             # Stage 1: finished scanning/summarizing
             self._show_ai_progress(entry_path, stage=1, detail=detail)
 
-            # Kick background analysis
+            # Start timing *here* and pass it to the background worker
+            started_at = time.perf_counter()
             self.call_in_thread(
                 self._ai_explain_directory_worker,
                 entry_path,
                 manifest,
+                started_at,          # <── new arg
             )
             return
 
         # --- FILE PATH --------------------------------------------------------
-        # For files, read content (with safety limits) and send to worker
         try:
-            # You can tune this limit if needed
             max_bytes = 512 * 1024  # 512 KB
             raw = entry_path.read_bytes()
             if len(raw) > max_bytes:
                 raw = raw[:max_bytes]
-            # Try UTF-8 first, fall back to replacement
             try:
                 content = raw.decode("utf-8")
             except UnicodeDecodeError:
@@ -1339,11 +1360,13 @@ class ShellPilotApp(App):
         # Stage 1: finished reading the file
         self._show_ai_progress(entry_path, stage=1, detail=detail)
 
-        # Kick the background worker
+        # Start timing and pass it along
+        started_at = time.perf_counter()
         self.call_in_thread(
             self._ai_explain_file_worker,
             entry_path,
             content,
+            started_at,              # <── new arg
         )
 
     def _show_ai_progress(self, path: Path, stage: int, detail: str | None = None) -> None:
@@ -1462,6 +1485,12 @@ class ShellPilotApp(App):
                     "The next AI analysis will use this model."
                 )
             self._set_status(f"AI: switched to {spec.name}")
+
+            # Persist local model choice for the provider config
+            cfg = load_ai_config()
+            cfg["provider"] = "local"
+            cfg["local_model_id"] = model_id
+            save_ai_config(cfg)
             return
 
         # 3) Otherwise, download it in a background thread with progress
@@ -1503,6 +1532,12 @@ class ShellPilotApp(App):
 
                 set_engine_model(model_id)
 
+                # Remember that we're using local models and which one
+                cfg = load_ai_config()
+                cfg["provider"] = "local"
+                cfg["local_model_id"] = model_id
+                save_ai_config(cfg)
+
                 self.call_from_thread(
                     lambda: (
                         self._set_status(f"AI: switched to {spec.name}"),
@@ -1530,15 +1565,34 @@ class ShellPilotApp(App):
         # Kick off the download/switch in a background thread
         self.call_in_thread(worker)
 
-    def _ai_explain_file_worker(self, path: Path, content: str) -> None:
+    def _ai_explain_file_worker(
+        self,
+        path: Path,
+        content: str,
+        started_at: float | None = None,
+    ) -> None:
         """Background worker: run the LLM on a file, then post the result."""
         try:
             engine = get_engine()
         except FileNotFoundError as exc:
             self.call_from_thread(self._show_ai_error, str(exc))
+            if started_at is not None:
+                self.call_from_thread(
+                    self._show_ai_timing,
+                    path,
+                    "File explanation (failed: engine not found)",
+                    started_at,
+                )
             return
         except Exception as exc:
             self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
+            if started_at is not None:
+                self.call_from_thread(
+                    self._show_ai_timing,
+                    path,
+                    "File explanation (failed during init)",
+                    started_at,
+                )
             return
 
         # Stage 2a: model is loaded / ready
@@ -1571,17 +1625,48 @@ class ShellPilotApp(App):
             "Post-processing the model output into a concise explanation…",
         )
 
-        self.call_from_thread(self._show_ai_success, path, answer)
+        elapsed = None
+        if started_at is not None:
+            elapsed = time.perf_counter() - started_at
 
-    def _ai_explain_directory_worker(self, path: Path, manifest: str) -> None:
+        self.call_from_thread(self._show_ai_success, path, answer, elapsed)
+
+        if started_at is not None:
+            self.call_from_thread(
+                self._show_ai_timing,
+                path,
+                "File explanation",
+                started_at,
+            )
+
+    def _ai_explain_directory_worker(
+        self,
+        path: Path,
+        manifest: str,
+        started_at: float | None = None,
+    ) -> None:
         """Background worker: run the LLM on a directory manifest."""
         try:
             engine = get_engine()
         except FileNotFoundError as exc:
             self.call_from_thread(self._show_ai_error, str(exc))
+            if started_at is not None:
+                self.call_from_thread(
+                    self._show_ai_timing,
+                    path,
+                    "Directory analysis (failed: engine not found)",
+                    started_at,
+                )
             return
         except Exception as exc:
             self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
+            if started_at is not None:
+                self.call_from_thread(
+                    self._show_ai_timing,
+                    path,
+                    "Directory analysis (failed during init)",
+                    started_at,
+                )
             return
 
         # Stage 2: actively analyzing the directory
@@ -1598,6 +1683,13 @@ class ShellPilotApp(App):
             answer = engine.analyze_directory(path, manifest)
         except Exception as exc:
             self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
+            if started_at is not None:
+                self.call_from_thread(
+                    self._show_ai_timing,
+                    path,
+                    "Directory analysis (failed during inference)",
+                    started_at,
+                )
             return
 
         # Stage 3: formatting
@@ -1608,7 +1700,22 @@ class ShellPilotApp(App):
             "Organizing directory analysis into sections (purpose, key files, risks)…",
         )
 
-        self.call_from_thread(self._show_ai_success, path, answer)
+        # Compute elapsed here
+        elapsed = None
+        if started_at is not None:
+            elapsed = time.perf_counter() - started_at
+
+        # Success: show result + timing in panel
+        self.call_from_thread(self._show_ai_success, path, answer, elapsed)
+
+        # And also in status bar
+        if started_at is not None:
+            self.call_from_thread(
+                self._show_ai_timing,
+                path,
+                "Directory analysis",
+                started_at,
+            )
 
     def _show_ai_error(self, message: str) -> None:
         """Render an AI-related error in the output pane + status bar."""
@@ -1621,13 +1728,24 @@ class ShellPilotApp(App):
             )
             self.output.update(panel)
 
-    def _show_ai_success(self, path: Path, answer: str) -> None:
+    def _show_ai_success(
+        self,
+        path: Path,
+        answer: str,
+        elapsed: float | None = None,
+    ) -> None:
         """Render the AI explanation in the output pane and status bar."""
         self._set_status(f"AI: analysis complete for {path.name}")
 
         if self.output:
-            # Use Markdown so lists/headings render nicely
-            md = Markdown(answer)
+            # Prepend a small timing line if we have it
+            if elapsed is not None:
+                timing_line = f"[dim]🤖 Completed in {elapsed:.2f}s[/dim]\n"
+                body = timing_line + "\n" + answer
+            else:
+                body = answer
+
+            md = Markdown(body)
             panel = Panel.fit(
                 md,
                 title=f"AI: {path.name}",
@@ -1636,7 +1754,6 @@ class ShellPilotApp(App):
             self.output.update(panel)
 
         if getattr(self, "preview", None) is not None:
-            # Short mirrored note in the help pane
             self.preview.update(
                 Panel.fit(
                     f"AI summary for [magenta]{path.name}[/magenta].\n\n"
@@ -1650,7 +1767,7 @@ class ShellPilotApp(App):
         """
         Show a list of AI models, their indices, install status, and which one is active.
         """
-        from shellpilot.ai.engine import get_engine
+        from shellpilot.ai.config import load_ai_config
 
         if not self.output:
             return
@@ -1667,8 +1784,30 @@ class ShellPilotApp(App):
         except Exception:
             current_id = None
 
+        cfg = load_ai_config()
+        provider = cfg.get("provider", "local")
+        local_model_id = cfg.get("local_model_id") or current_id
+
         lines: list[str] = []
-        lines.append("[b]Available AI models:[/b]")
+        lines.append("[b]AI configuration:[/b]")
+        lines.append(f"- Active provider: [b]{provider}[/b]")
+
+        field_map = {
+            "gpt": "openai_api_key",
+            "gemini": "gemini_api_key",
+            "copilot": "copilot_api_key",
+        }
+        if provider == "local":
+            lines.append(
+                f"- Local model id: [code]{local_model_id or 'phi-3.5-mini-q4'}[/code]"
+            )
+        else:
+            field = field_map.get(provider)
+            key = cfg.get(field)
+            lines.append(f"- Remote API key: [dim]{self._mask_api_key(key)}[/dim]")
+
+        lines.append("")
+        lines.append("[b]Available AI models (local GGUF):[/b]")
         lines.append("")
 
         if not model_ids:
@@ -1852,6 +1991,12 @@ class ShellPilotApp(App):
                 self._handle_aimodel(target)
                 return  # no FS change, no need to refresh browser
 
+            elif action == "aimodel_provider":
+                provider = (result.get("provider") or "").strip()
+                api_key = (result.get("api_key") or "").strip()
+                self._handle_aimodel_provider(provider, api_key)
+                return  # no FS change, no need to refresh browser
+
             elif action == "aimodels":
                 self._show_ai_model_list()
                 return  # listing only, no refresh
@@ -1866,3 +2011,63 @@ class ShellPilotApp(App):
         except Exception as exc:
             # eventually we can route this to OutputPanel too
             self._set_status(f"[error] {exc}")
+
+    def _handle_aimodel_provider(self, provider: str, api_key: str) -> None:
+        """
+        Handle `aimodel gpt|gemini|copilot <API_KEY>` from the command palette.
+
+        Only stores keys on first use; later calls won't overwrite.
+        """
+        provider = provider.lower()
+        if provider not in {"gpt", "gemini", "copilot"}:
+            self._set_status(f"AI: unknown provider '{provider}'")
+            if self.output:
+                self.output.update(
+                    f"[b]AI:[/b] Unknown provider: [code]{provider}[/code]\n"
+                    "Valid options: gpt, gemini, copilot."
+                )
+            return
+
+        api_key = (api_key or "").strip()
+        if not api_key:
+            self._set_status("AI: empty API key; nothing saved.")
+            if self.output:
+                self.output.update(
+                    "[b]AI:[/b] Empty API key – nothing saved.\n\n"
+                    "Usage examples:\n"
+                    "  [code]: aimodel gpt sk-...[/code]\n"
+                    "  [code]: aimodel gemini AIza...[/code]\n"
+                    "  [code]: aimodel copilot ghp_...[/code]\n"
+                )
+            return
+
+        changed, field = set_provider_and_key(provider, api_key, overwrite=False)
+
+        if not changed:
+            # Key already exists → don't overwrite
+            cfg = load_ai_config()
+            existing = cfg.get(field)
+            masked = self._mask_api_key(existing)
+            self._set_status(f"AI: {provider} key already set; not overwriting.")
+            if self.output:
+                self.output.update(
+                    "[b]AI provider already configured.[/b]\n\n"
+                    f"Provider : [b]{provider}[/b]\n"
+                    f"Existing : [dim]{masked}[/dim]\n\n"
+                    "To rotate this key you can delete:\n"
+                    "  [code]~/.config/shellpilot/ai.json[/code]\n"
+                    "while ShellPilot is not running, then run the command again."
+                )
+            return
+
+        masked = self._mask_api_key(api_key)
+        self._set_status(f"AI: {provider} API key stored.")
+
+        if self.output:
+            self.output.update(
+                "[b]AI provider configured.[/b]\n\n"
+                f"Provider : [b]{provider}[/b]\n"
+                f"API key  : [dim]{masked}[/dim]\n\n"
+                "[dim]The key is stored locally in "
+                "~/.config/shellpilot/ai.json with permissions 600.[/dim]"
+            )

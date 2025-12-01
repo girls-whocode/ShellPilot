@@ -42,7 +42,22 @@ ACTIONS: list[ActionDefinition] = [
     ActionDefinition(
         "aimodel",
         "aimodel <id-or-index>",
-        "Switch AI model (by id or numeric index). Downloads if missing.",
+        "Switch local AI model (by id or numeric index). Downloads if missing.",
+    ),
+    ActionDefinition(
+        "aimodel gpt",
+        "aimodel gpt <API_KEY>",
+        "Configure OpenAI GPT provider (stores API key on first use).",
+    ),
+    ActionDefinition(
+        "aimodel gemini",
+        "aimodel gemini <API_KEY>",
+        "Configure Google Gemini provider (stores API key on first use).",
+    ),
+    ActionDefinition(
+        "aimodel copilot",
+        "aimodel copilot <API_KEY>",
+        "Configure GitHub Copilot provider (stores API key on first use).",
     ),
     ActionDefinition(
         "aimodels",
@@ -50,7 +65,6 @@ ACTIONS: list[ActionDefinition] = [
         "Show available AI models with indices and install status.",
     ),
 ]
-
 
 class ActionMenu(ModalScreen[dict[str, Any] | None]):
     """Floating command palette opened with ':'."""
@@ -217,8 +231,19 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
         if cmd == "aimodel":
             if not args:
                 return None
-            # We don't interpret here; we just pass the raw target
-            # (can be '1', '2', or 'phi-3.5-mini-q4', etc.)
+
+            sub = args[0].lower()
+            if sub in {"gpt", "gemini", "copilot"}:
+                # Usage: aimodel gpt <API_KEY>
+                if len(args) < 2:
+                    return None
+                return {
+                    "action": "aimodel_provider",
+                    "provider": sub,
+                    "api_key": " ".join(args[1:]),
+                }
+
+            # Otherwise treat it as the existing local model selector
             return {
                 "action": "aimodel",
                 "target": " ".join(args),
