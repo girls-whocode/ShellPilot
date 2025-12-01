@@ -234,16 +234,22 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
 
             sub = args[0].lower()
             if sub in {"gpt", "gemini", "copilot"}:
-                # Usage: aimodel gpt <API_KEY>
-                if len(args) < 2:
-                    return None
-                return {
-                    "action": "aimodel_provider",
-                    "provider": sub,
-                    "api_key": " ".join(args[1:]),
-                }
+                # Two modes:
+                #   aimodel gemini <API_KEY>  -> set key + switch
+                #   aimodel gemini           -> just switch (reuse stored key)
+                if len(args) == 1:
+                    return {
+                        "action": "aimodel_provider_switch",
+                        "provider": sub,
+                    }
+                else:
+                    return {
+                        "action": "aimodel_provider",
+                        "provider": sub,
+                        "api_key": " ".join(args[1:]),
+                    }
 
-            # Otherwise treat it as the existing local model selector
+            # Local model selection (id or index)
             return {
                 "action": "aimodel",
                 "target": " ".join(args),

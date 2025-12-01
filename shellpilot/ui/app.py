@@ -9,6 +9,7 @@ import uuid
 import sys
 import threading
 import time
+import requests
 from typing import Any, Optional
 from datetime import datetime
 
@@ -57,6 +58,11 @@ from shellpilot.ai.config import (
     load_ai_config,
     save_ai_config,
     set_provider_and_key,
+)
+from shellpilot.ai.remote import (
+    analyze_file_remote,
+    analyze_directory_remote,
+    RemoteAIError,
 )
 
 log_highlighter = LogHighlighter()
@@ -239,17 +245,6 @@ class ShellPilotApp(App):
             full = self._base_status
 
         self.status.update(full)
-
-    def _show_ai_timing(self, entry_path: Path, label: str, started_at: float) -> None:
-        """Display how long an AI task took for a given path."""
-        elapsed = time.perf_counter() - started_at
-        msg = f"🤖 {label} for [b]{entry_path.name}[/b] finished in {elapsed:.2f}s"
-
-        # Only touch the status bar, not the output panel
-        self._set_status(msg)
-
-        # If you *really* want it logged, you could later add a log panel
-        # or a non-destructive append method. For now, do nothing to self.output.
 
     # ---------- Trash helpers ----------
     def _init_trash_dir(self) -> tuple[Path, Path]:
@@ -455,18 +450,6 @@ class ShellPilotApp(App):
         self._set_status("Settings saved (Hugging Face token updated).")
 
     # ---------- Helpers ----------
-    def _show_ai_response(self, title: str, body: str) -> None:
-        """Render AI response in the main output panel (middle column)."""
-        panel = Panel.fit(
-            body,
-            title=title,
-            border_style="cyan",
-        )
-
-        # Show AI result in the middle OutputPanel so it's always visible
-        if getattr(self, "output", None) is not None:
-            self.output.update(panel)
-
     def _mask_api_key(self, key: str | None) -> str:
         """Return a human-friendly masked version of an API key."""
         if not key:
@@ -1248,33 +1231,6 @@ class ShellPilotApp(App):
         self.output.update("\n".join(lines))
         self._set_status("AI: model list shown – use ': aimodel <id-or-index>'.")
 
-    def _build_dir_manifest(self, path: Path, max_entries: int = 256) -> str:
-        """Return a short text manifest of a directory tree."""
-        lines: list[str] = []
-        base = path
-
-        for root, dirs, files in os.walk(base):
-            rel_root = os.path.relpath(root, base)
-            rel_root = "." if rel_root == "." else rel_root
-
-            for d in sorted(dirs):
-                if len(lines) >= max_entries:
-                    break
-                entry = d if rel_root == "." else f"{rel_root}/{d}"
-                lines.append(f"[DIR]  {entry}")
-
-            for f in sorted(files):
-                if len(lines) >= max_entries:
-                    break
-                entry = f if rel_root == "." else f"{rel_root}/{f}"
-                lines.append(f"      {entry}")
-
-            if len(lines) >= max_entries:
-                lines.append(f"... (truncated after {max_entries} entries)")
-                break
-
-        return "\n".join(lines) if lines else "(directory is empty)"
-
     def action_ai_explain_file(self) -> None:
         """Use the local AI model to explain the currently selected file or directory."""
         entry_path = self._get_selected_path()
@@ -1366,8 +1322,58 @@ class ShellPilotApp(App):
             self._ai_explain_file_worker,
             entry_path,
             content,
-            started_at,              # <── new arg
+            started_at,
         )
+
+    def _show_ai_timing(self, entry_path: Path, label: str, started_at: float) -> None:
+        """Display how long an AI task took for a given path."""
+        elapsed = time.perf_counter() - started_at
+        msg = f"🤖 {label} for [b]{entry_path.name}[/b] finished in {elapsed:.2f}s"
+
+        # Only touch the status bar, not the output panel
+        self._set_status(msg)
+
+        # Maybe add a *really* want it logged, you could later add a log panel
+        # or a non-destructive append method. For now, do nothing to self.output.
+
+    def _show_ai_response(self, title: str, body: str) -> None:
+        """Render AI response in the main output panel (middle column)."""
+        panel = Panel.fit(
+            body,
+            title=title,
+            border_style="cyan",
+        )
+
+        # Show AI result in the middle OutputPanel so it's always visible
+        if getattr(self, "output", None) is not None:
+            self.output.update(panel)
+
+    def _build_dir_manifest(self, path: Path, max_entries: int = 256) -> str:
+        """Return a short text manifest of a directory tree."""
+        lines: list[str] = []
+        base = path
+
+        for root, dirs, files in os.walk(base):
+            rel_root = os.path.relpath(root, base)
+            rel_root = "." if rel_root == "." else rel_root
+
+            for d in sorted(dirs):
+                if len(lines) >= max_entries:
+                    break
+                entry = d if rel_root == "." else f"{rel_root}/{d}"
+                lines.append(f"[DIR]  {entry}")
+
+            for f in sorted(files):
+                if len(lines) >= max_entries:
+                    break
+                entry = f if rel_root == "." else f"{rel_root}/{f}"
+                lines.append(f"      {entry}")
+
+            if len(lines) >= max_entries:
+                lines.append(f"... (truncated after {max_entries} entries)")
+                break
+
+        return "\n".join(lines) if lines else "(directory is empty)"
 
     def _show_ai_progress(self, path: Path, stage: int, detail: str | None = None) -> None:
         """
@@ -1383,11 +1389,6 @@ class ShellPilotApp(App):
         if not self.output:
             return
 
-        is_dir = path.is_dir()
-        kind = "directory" if is_dir else "file"
-
-        threads = get_engine().n_threads
-
         def mark(n: int, label: str) -> str:
             if stage > n:
                 prefix = "✅"
@@ -1396,23 +1397,56 @@ class ShellPilotApp(App):
             else:
                 prefix = " •"
             return f"{prefix} [b]Step {n}/3:[/b] {label}"
+        
+        is_dir = path.is_dir()
+        kind = "directory" if is_dir else "file"
 
-        # Optional: playful but professional indicators
-        if threads >= 12:
-            thread_status = f"🔥 Using {threads} CPU threads (high performance)"
-        elif threads >= 8:
-            thread_status = f"🚀 Using {threads} CPU threads"
-        elif threads >= 4:
-            thread_status = f"⚙️  Using {threads} CPU threads"
+        cfg = load_ai_config()
+        provider = cfg.get("provider", "local")
+
+        # Only query local engine thread count when actually using local
+        thread_status: str
+        if provider == "local":
+            try:
+                threads = get_engine().n_threads
+            except Exception:
+                threads = None
+
+            if threads is None:
+                thread_status = "⚙️  Local model (thread count unknown)"
+            elif threads >= 12:
+                thread_status = f"🔥 Using {threads} CPU threads (high performance, local)"
+            elif threads >= 8:
+                thread_status = f"🚀 Using {threads} CPU threads (local)"
+            elif threads >= 4:
+                thread_status = f"⚙️  Using {threads} CPU threads (local)"
+            else:
+                thread_status = f"🐢 Using {threads} CPU thread (local, limited mode)"
         else:
-            thread_status = f"🐢 Using {threads} CPU thread (limited mode)"
+            provider_name = {
+                "gpt": "OpenAI GPT",
+                "gemini": "Google Gemini",
+                "copilot": "GitHub Copilot",
+            }.get(provider, provider)
+            thread_status = f"🌐 Using remote {provider_name} backend"
+
+        if provider == "local":
+            step2_label = "Analyze with local AI model"
+        elif provider == "gpt":
+            step2_label = "Analyze with OpenAI GPT"
+        elif provider == "gemini":
+            step2_label = "Analyze with Google Gemini"
+        elif provider == "copilot":
+            step2_label = "Analyze with GitHub Copilot"
+        else:
+            step2_label = "Analyze with configured AI provider"
 
         lines: list[str] = [
             f"[b]AI explain ({kind}):[/b] {path}",
-            f"[dim]{thread_status}[/dim]",     # <--- NEW LINE ADDED HERE
+            f"[dim]{thread_status}[/dim]",
             "",
             mark(1, "Read and summarize contents"),
-            mark(2, "Analyze with local AI model"),
+            mark(2, step2_label),
             mark(3, "Organize explanation for display"),
         ]
 
@@ -1477,6 +1511,13 @@ class ShellPilotApp(App):
         # 2) If the model file already exists, just switch in-place
         if model_path.is_file():
             set_engine_model(model_id)
+
+            # Mark provider as local and remember the chosen model
+            cfg = load_ai_config()
+            cfg["provider"] = "local"
+            cfg["local_model_id"] = model_id
+            save_ai_config(cfg)
+
             if self.output:
                 self.output.update(
                     f"[b]AI model switched:[/b] {spec.name} ([code]{model_id}[/code])\n\n"
@@ -1486,11 +1527,6 @@ class ShellPilotApp(App):
                 )
             self._set_status(f"AI: switched to {spec.name}")
 
-            # Persist local model choice for the provider config
-            cfg = load_ai_config()
-            cfg["provider"] = "local"
-            cfg["local_model_id"] = model_id
-            save_ai_config(cfg)
             return
 
         # 3) Otherwise, download it in a background thread with progress
@@ -1571,53 +1607,112 @@ class ShellPilotApp(App):
         content: str,
         started_at: float | None = None,
     ) -> None:
-        """Background worker: run the LLM on a file, then post the result."""
-        try:
-            engine = get_engine()
-        except FileNotFoundError as exc:
-            self.call_from_thread(self._show_ai_error, str(exc))
-            if started_at is not None:
-                self.call_from_thread(
-                    self._show_ai_timing,
-                    path,
-                    "File explanation (failed: engine not found)",
-                    started_at,
-                )
-            return
-        except Exception as exc:
-            self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
-            if started_at is not None:
-                self.call_from_thread(
-                    self._show_ai_timing,
-                    path,
-                    "File explanation (failed during init)",
-                    started_at,
-                )
-            return
+        """Background worker: run the AI backend on a file, then post the result."""
+        cfg = load_ai_config()
+        provider = cfg.get("provider", "local")
 
-        # Stage 2a: model is loaded / ready
-        self.call_from_thread(
-            self._show_ai_progress,
-            path,
-            2,
-            "Loaded local AI model; building prompt from file contents…",
-        )
+        if provider == "local":
+            # --- Local GGUF path ----------------------------------------------
+            try:
+                engine = get_engine()
+            except FileNotFoundError as exc:
+                self.call_from_thread(self._show_ai_error, str(exc))
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        "File explanation (failed: engine not found)",
+                        started_at,
+                    )
+                return
+            except Exception as exc:
+                self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        "File explanation (failed during init)",
+                        started_at,
+                    )
+                return
 
-        try:
-            # Optional: mention approximate prompt size
-            approx_chars = len(content)
-            detail = (
-                f"Feeding ~{approx_chars} characters of source text into the model "
-                "and generating a structured explanation…"
+            # Stage 2a: model is loaded / ready
+            self.call_from_thread(
+                self._show_ai_progress,
+                path,
+                2,
+                "Loaded local AI model; building prompt from file contents…",
             )
-            self.call_from_thread(self._show_ai_progress, path, 2, detail)
 
-            answer = engine.analyze_file(path, content)
-        except Exception as exc:
-            self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
-            return
+            try:
+                approx_chars = len(content)
+                detail = (
+                    f"Feeding ~{approx_chars} characters of source text into the model "
+                    "and generating a structured explanation…"
+                )
+                self.call_from_thread(self._show_ai_progress, path, 2, detail)
 
-        # Stage 3: post-processing
+                answer = engine.analyze_file(path, content)
+            except Exception as exc:
+                self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        "File explanation (failed during inference)",
+                        started_at,
+                    )
+                return
+
+        else:
+            # --- Remote provider path -----------------------------------------
+            provider_label = {
+                "gpt": "OpenAI GPT",
+                "gemini": "Google Gemini",
+                "copilot": "GitHub Copilot",
+            }.get(provider, provider)
+
+            self.call_from_thread(
+                self._show_ai_progress,
+                path,
+                2,
+                f"Contacting remote {provider_label} backend…",
+            )
+
+            try:
+                approx_chars = len(content)
+                detail = (
+                    f"Sending ~{approx_chars} characters to {provider_label} and "
+                    "waiting for a response…"
+                )
+                self.call_from_thread(self._show_ai_progress, path, 2, detail)
+
+                answer = analyze_file_remote(provider, path, content)
+            except RemoteAIError as exc:
+                self.call_from_thread(self._show_ai_error, str(exc))
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        f"File explanation (failed: {provider_label} error)",
+                        started_at,
+                    )
+                return
+            except Exception as exc:
+                self.call_from_thread(
+                    self._show_ai_error,
+                    f"Remote AI error ({provider_label}): {exc}",
+                )
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        f"File explanation (failed during remote inference: {provider_label})",
+                        started_at,
+                    )
+                return
+
+        # --- Common post-processing -------------------------------------------
         self.call_from_thread(
             self._show_ai_progress,
             path,
@@ -1645,52 +1740,97 @@ class ShellPilotApp(App):
         manifest: str,
         started_at: float | None = None,
     ) -> None:
-        """Background worker: run the LLM on a directory manifest."""
-        try:
-            engine = get_engine()
-        except FileNotFoundError as exc:
-            self.call_from_thread(self._show_ai_error, str(exc))
-            if started_at is not None:
-                self.call_from_thread(
-                    self._show_ai_timing,
-                    path,
-                    "Directory analysis (failed: engine not found)",
-                    started_at,
-                )
-            return
-        except Exception as exc:
-            self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
-            if started_at is not None:
-                self.call_from_thread(
-                    self._show_ai_timing,
-                    path,
-                    "Directory analysis (failed during init)",
-                    started_at,
-                )
-            return
+        """Background worker: run the AI backend on a directory manifest."""
+        cfg = load_ai_config()
+        provider = cfg.get("provider", "local")
 
-        # Stage 2: actively analyzing the directory
-        approx_lines = manifest.count("\n") + 1
-        self.call_from_thread(
-            self._show_ai_progress,
-            path,
-            2,
-            f"Analyzing a manifest of ~{approx_lines} entries; "
-            "looking for structure, notable files, and potentially risky items.",
-        )
+        if provider == "local":
+            try:
+                engine = get_engine()
+            except FileNotFoundError as exc:
+                self.call_from_thread(self._show_ai_error, str(exc))
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        "Directory analysis (failed: engine not found)",
+                        started_at,
+                    )
+                return
+            except Exception as exc:
+                self.call_from_thread(self._show_ai_error, f"AI init error: {exc}")
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        "Directory analysis (failed during init)",
+                        started_at,
+                    )
+                return
 
-        try:
-            answer = engine.analyze_directory(path, manifest)
-        except Exception as exc:
-            self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
-            if started_at is not None:
+            approx_lines = manifest.count("\n") + 1
+            self.call_from_thread(
+                self._show_ai_progress,
+                path,
+                2,
+                f"Analyzing a manifest of ~{approx_lines} entries; "
+                "looking for structure, notable files, and potentially risky items.",
+            )
+
+            try:
+                answer = engine.analyze_directory(path, manifest)
+            except Exception as exc:
+                self.call_from_thread(self._show_ai_error, f"AI inference error: {exc}")
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        "Directory analysis (failed during inference)",
+                        started_at,
+                    )
+                return
+
+        else:
+            provider_label = {
+                "gpt": "OpenAI GPT",
+                "gemini": "Google Gemini",
+                "copilot": "GitHub Copilot",
+            }.get(provider, provider)
+
+            approx_lines = manifest.count("\n") + 1
+            self.call_from_thread(
+                self._show_ai_progress,
+                path,
+                2,
+                f"Sending a manifest of ~{approx_lines} entries to {provider_label} "
+                "and evaluating directory purpose and risks…",
+            )
+
+            try:
+                answer = analyze_directory_remote(provider, path, manifest)
+            except RemoteAIError as exc:
+                self.call_from_thread(self._show_ai_error, str(exc))
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        f"Directory analysis (failed: {provider_label} error)",
+                        started_at,
+                    )
+                return
+            except Exception as exc:
                 self.call_from_thread(
-                    self._show_ai_timing,
-                    path,
-                    "Directory analysis (failed during inference)",
-                    started_at,
+                    self._show_ai_error,
+                    f"Remote AI error ({provider_label}): {exc}",
                 )
-            return
+                if started_at is not None:
+                    self.call_from_thread(
+                        self._show_ai_timing,
+                        path,
+                        f"Directory analysis (failed during remote inference: {provider_label})",
+                        started_at,
+                    )
+                return
 
         # Stage 3: formatting
         self.call_from_thread(
@@ -1700,22 +1840,11 @@ class ShellPilotApp(App):
             "Organizing directory analysis into sections (purpose, key files, risks)…",
         )
 
-        # Compute elapsed here
         elapsed = None
         if started_at is not None:
             elapsed = time.perf_counter() - started_at
 
-        # Success: show result + timing in panel
         self.call_from_thread(self._show_ai_success, path, answer, elapsed)
-
-        # And also in status bar
-        if started_at is not None:
-            self.call_from_thread(
-                self._show_ai_timing,
-                path,
-                "Directory analysis",
-                started_at,
-            )
 
     def _show_ai_error(self, message: str) -> None:
         """Render an AI-related error in the output pane + status bar."""
@@ -1858,6 +1987,107 @@ class ShellPilotApp(App):
         self.output.update("\n".join(lines))
         self._set_status("AI: listed available models.")
 
+    def _handle_aimodel_provider(self, provider: str, api_key: str) -> None:
+        """
+        Handle `aimodel gpt|gemini|copilot <API_KEY>` from the command palette.
+
+        Only stores keys on first use; later calls won't overwrite.
+        """
+        provider = provider.lower()
+        if provider not in {"gpt", "gemini", "copilot"}:
+            self._set_status(f"AI: unknown provider '{provider}'")
+            if self.output:
+                self.output.update(
+                    f"[b]AI:[/b] Unknown provider: [code]{provider}[/code]\n"
+                    "Valid options: gpt, gemini, copilot."
+                )
+            return
+
+        api_key = (api_key or "").strip()
+        if not api_key:
+            self._set_status("AI: empty API key; nothing saved.")
+            if self.output:
+                self.output.update(
+                    "[b]AI:[/b] Empty API key – nothing saved.\n\n"
+                    "Usage examples:\n"
+                    "  [code]: aimodel gpt sk-...[/code]\n"
+                    "  [code]: aimodel gemini AIza...[/code]\n"
+                    "  [code]: aimodel copilot ghp_...[/code]\n"
+                )
+            return
+
+        changed, field = set_provider_and_key(provider, api_key, overwrite=False)
+
+        if not changed:
+            # Key already exists → don't overwrite
+            cfg = load_ai_config()
+            existing = cfg.get(field)
+            masked = self._mask_api_key(existing)
+            self._set_status(f"AI: {provider} key already set; not overwriting.")
+            if self.output:
+                self.output.update(
+                    "[b]AI provider already configured.[/b]\n\n"
+                    f"Provider : [b]{provider}[/b]\n"
+                    f"Existing : [dim]{masked}[/dim]\n\n"
+                    "To rotate this key you can delete:\n"
+                    "  [code]~/.config/shellpilot/ai.json[/code]\n"
+                    "while ShellPilot is not running, then run the command again."
+                )
+            return
+
+        masked = self._mask_api_key(api_key)
+        self._set_status(f"AI: {provider} API key stored.")
+
+        if self.output:
+            self.output.update(
+                "[b]AI provider configured.[/b]\n\n"
+                f"Provider : [b]{provider}[/b]\n"
+                f"API key  : [dim]{masked}[/dim]\n\n"
+                "[dim]The key is stored locally in "
+                "~/.config/shellpilot/ai.json with permissions 600.[/dim]"
+            )
+
+    def _handle_aimodel_provider_switch(self, provider: str) -> None:
+        provider = provider.lower()
+        if provider not in {"gpt", "gemini", "copilot"}:
+            self._set_status(f"AI: unknown provider '{provider}'")
+            if self.output:
+                self.output.update(
+                    f"[b]AI:[/b] Unknown provider [code]{provider}[/code]. "
+                    "Valid options: gpt, gemini, copilot."
+                )
+            return
+
+        cfg = load_ai_config()
+        field_map = {
+            "gpt": "openai_api_key",
+            "gemini": "gemini_api_key",
+            "copilot": "copilot_api_key",
+        }
+        field = field_map[provider]
+        key = cfg.get(field)
+
+        if not key:
+            self._set_status(f"AI: no stored API key for {provider}.")
+            if self.output:
+                self.output.update(
+                    f"[b]AI:[/b] No stored API key found for [b]{provider}[/b].\n\n"
+                    "First configure it with:\n"
+                    f"  [code]: aimodel {provider} &lt;API_KEY&gt;[/code]\n"
+                )
+            return
+
+        cfg["provider"] = provider
+        save_ai_config(cfg)
+
+        self._set_status(f"AI: switched to {provider} (remote).")
+        if self.output:
+            self.output.update(
+                "[b]AI provider switched.[/b]\n\n"
+                f"Provider : [b]{provider}[/b]\n"
+                f"API key  : [dim]{self._mask_api_key(key)}[/dim]\n"
+            )
+
     # ---------- Background workers ----------
 
     def action_empty_trash(self) -> None:
@@ -1991,16 +2221,21 @@ class ShellPilotApp(App):
                 self._handle_aimodel(target)
                 return  # no FS change, no need to refresh browser
 
+            elif action == "aimodels":
+                self._show_ai_model_list()
+                return  # listing only, no refresh
+
             elif action == "aimodel_provider":
                 provider = (result.get("provider") or "").strip()
                 api_key = (result.get("api_key") or "").strip()
                 self._handle_aimodel_provider(provider, api_key)
-                return  # no FS change, no need to refresh browser
+                return
 
-            elif action == "aimodels":
-                self._show_ai_model_list()
-                return  # listing only, no refresh
-            
+            elif action == "aimodel_provider_switch":
+                provider = (result.get("provider") or "").strip()
+                self._handle_aimodel_provider_switch(provider)
+                return
+
             else:
                 self._set_status(f"Unknown command: {action}")
                 return
@@ -2011,63 +2246,3 @@ class ShellPilotApp(App):
         except Exception as exc:
             # eventually we can route this to OutputPanel too
             self._set_status(f"[error] {exc}")
-
-    def _handle_aimodel_provider(self, provider: str, api_key: str) -> None:
-        """
-        Handle `aimodel gpt|gemini|copilot <API_KEY>` from the command palette.
-
-        Only stores keys on first use; later calls won't overwrite.
-        """
-        provider = provider.lower()
-        if provider not in {"gpt", "gemini", "copilot"}:
-            self._set_status(f"AI: unknown provider '{provider}'")
-            if self.output:
-                self.output.update(
-                    f"[b]AI:[/b] Unknown provider: [code]{provider}[/code]\n"
-                    "Valid options: gpt, gemini, copilot."
-                )
-            return
-
-        api_key = (api_key or "").strip()
-        if not api_key:
-            self._set_status("AI: empty API key; nothing saved.")
-            if self.output:
-                self.output.update(
-                    "[b]AI:[/b] Empty API key – nothing saved.\n\n"
-                    "Usage examples:\n"
-                    "  [code]: aimodel gpt sk-...[/code]\n"
-                    "  [code]: aimodel gemini AIza...[/code]\n"
-                    "  [code]: aimodel copilot ghp_...[/code]\n"
-                )
-            return
-
-        changed, field = set_provider_and_key(provider, api_key, overwrite=False)
-
-        if not changed:
-            # Key already exists → don't overwrite
-            cfg = load_ai_config()
-            existing = cfg.get(field)
-            masked = self._mask_api_key(existing)
-            self._set_status(f"AI: {provider} key already set; not overwriting.")
-            if self.output:
-                self.output.update(
-                    "[b]AI provider already configured.[/b]\n\n"
-                    f"Provider : [b]{provider}[/b]\n"
-                    f"Existing : [dim]{masked}[/dim]\n\n"
-                    "To rotate this key you can delete:\n"
-                    "  [code]~/.config/shellpilot/ai.json[/code]\n"
-                    "while ShellPilot is not running, then run the command again."
-                )
-            return
-
-        masked = self._mask_api_key(api_key)
-        self._set_status(f"AI: {provider} API key stored.")
-
-        if self.output:
-            self.output.update(
-                "[b]AI provider configured.[/b]\n\n"
-                f"Provider : [b]{provider}[/b]\n"
-                f"API key  : [dim]{masked}[/dim]\n\n"
-                "[dim]The key is stored locally in "
-                "~/.config/shellpilot/ai.json with permissions 600.[/dim]"
-            )

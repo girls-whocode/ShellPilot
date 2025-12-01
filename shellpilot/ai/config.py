@@ -1,3 +1,5 @@
+# shellpilot/ai/config.py
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +14,7 @@ CONFIG_PATH = CONFIG_DIR / "ai.json"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "provider": "local",              # "local" | "gpt" | "gemini" | "copilot"
-    "local_model_id": "phi-3.5-mini-q4",
+    "local_model_id": None,           # last-used local model
     "openai_api_key": None,
     "gemini_api_key": None,
     "copilot_api_key": None,
@@ -20,7 +22,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 def load_ai_config() -> Dict[str, Any]:
-    """Load AI provider configuration from ~/.config/shellpilot/ai.json."""
     cfg = DEFAULT_CONFIG.copy()
     try:
         if CONFIG_PATH.is_file():
@@ -28,13 +29,12 @@ def load_ai_config() -> Dict[str, Any]:
             if isinstance(data, dict):
                 cfg.update(data)
     except Exception:
-        # Corrupt config? Start with defaults but don't crash the app.
+        # Corrupt/invalid config → ignore and use defaults
         pass
     return cfg
 
 
 def save_ai_config(cfg: Dict[str, Any]) -> None:
-    """Persist AI provider configuration to disk with 0600 perms."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -42,7 +42,7 @@ def save_ai_config(cfg: Dict[str, Any]) -> None:
     try:
         os.chmod(CONFIG_PATH, 0o600)
     except Exception:
-        # Best-effort; ignore chmod failures on weird filesystems.
+        # Non-POSIX / weird FS – best effort only
         pass
 
 
@@ -52,12 +52,9 @@ def set_provider_and_key(
     overwrite: bool = False,
 ) -> Tuple[bool, str]:
     """
-    Set the active provider and its API key.
+    Set active provider + its API key.
 
-    Returns (changed, message_key):
-      - changed == True  → config updated
-      - changed == False → key already existed and overwrite=False
-                           message_key is the config field name (e.g. "openai_api_key")
+    Returns (changed, field_name). If changed is False, we *did not* overwrite.
     """
     cfg = load_ai_config()
 
