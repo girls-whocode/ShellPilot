@@ -7,10 +7,9 @@ from typing import Literal
 import os
 import requests
 from requests import HTTPError
+from shellpilot.ai.config import load_ai_config, get_effective_ai_settings
 
-from shellpilot.ai.config import load_ai_config
-
-ProviderType = Literal["gpt", "gemini", "copilot"]
+ProviderType = Literal["gpt", "gemini", "copilot", "selfhost"]
 
 class RemoteAIError(RuntimeError):
     pass
@@ -164,6 +163,74 @@ def _call_copilot(prompt: str) -> str:
         "Edit shellpilot/ai/remote.py::_call_copilot() to point at your Copilot gateway."
     )
 
+# -------------------- Self-hosted OpenAI-compatible backend --------------------
+
+def _call_selfhost(prompt: str) -> str:
+    """
+    Call a self-hosted OpenAI-compatible backend (vLLM, Ollama, LM Studio, etc.).
+    """
+    settings = get_effective_ai_settings()
+    base_url = (settings.get("base_url") or "").rstrip("/")
+    api_key = settings.get("api_key")
+    model = settings.get("model")
+
+    if not base_url:
+        raise RemoteAIError(
+            "Selfhost provider selected but no base URL is configured.\n\n"
+            "Set SHELLPILOT_AI_BASE_URL (e.g. http://HOST:PORT/v1) or "
+            "configure selfhost_base_url in ~/.config/shellpilot/ai.json."
+        )
+
+    if not model:
+        raise RemoteAIError(
+            "Selfhost provider selected but no model id is configured.\n\n"
+            "Set SHELLPILOT_AI_MODEL or selfhost_model in ~/.config/shellpilot/ai.json."
+        )
+
+    endpoint = f"{base_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are ShellPilot, a concise Linux-focused assistant "
+                    "running inside a terminal file manager."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0.2,
+    }
+
+    try:
+        resp = requests.post(endpoint, headers=headers, json=body, timeout=90)
+        if resp.status_code >= 400:
+            try:
+                data = resp.json()
+                msg = data.get("error", {}).get("message") or resp.text
+            except Exception:
+                msg = resp.text
+            raise RemoteAIError(f"Selfhost error {resp.status_code}: {msg}")
+    except HTTPError as exc:
+        raise RemoteAIError(f"Selfhost HTTP error: {exc}") from exc
+    except Exception as exc:
+        raise RemoteAIError(f"Selfhost request failed: {exc}") from exc
+
+    data = resp.json()
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        raise RemoteAIError(f"Unexpected selfhost response format: {exc}") from exc
+    
 # -------------------- Public entrypoints --------------------
 
 def analyze_file_remote(provider: ProviderType, path: Path, content: str) -> str:
@@ -174,6 +241,8 @@ def analyze_file_remote(provider: ProviderType, path: Path, content: str) -> str
         return _call_gemini(prompt)
     if provider == "copilot":
         return _call_copilot(prompt)
+    if provider == "selfhost":
+        return _call_selfhost(prompt)
     raise RemoteAIError(f"Unsupported remote provider: {provider}")
 
 def analyze_directory_remote(provider: ProviderType, path: Path, manifest: str) -> str:
@@ -184,4 +253,7 @@ def analyze_directory_remote(provider: ProviderType, path: Path, manifest: str) 
         return _call_gemini(prompt)
     if provider == "copilot":
         return _call_copilot(prompt)
+    if provider == "selfhost":
+        return _call_selfhost(prompt)
     raise RemoteAIError(f"Unsupported remote provider: {provider}")
+

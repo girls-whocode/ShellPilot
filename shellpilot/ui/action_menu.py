@@ -60,6 +60,11 @@ ACTIONS: list[ActionDefinition] = [
         "Configure GitHub Copilot provider (stores API key on first use).",
     ),
     ActionDefinition(
+        "aimodel selfhost",
+        "aimodel selfhost <URL> <API_KEY>",
+        "Configure a selfhosted LLM on your own server (stores URL and API key on first use, use again to change it).",
+    ),
+    ActionDefinition(
         "aimodels",
         "aimodels",
         "Show available AI models with indices and install status.",
@@ -228,11 +233,30 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
                 "name": " ".join(args),
             }
 
+        if cmd in {"ai", "aimodel"} and args and args[0].lower() == "status":
+            return {
+                "action": "ai_status",
+            }
+
         if cmd == "aimodel":
             if not args:
                 return None
 
             sub = args[0].lower()
+
+            # 🔹 NEW: selfhost support
+            # : aimodel selfhost                -> just switch to selfhost (using stored config)
+            # : aimodel selfhost <URL> <APIKEY> -> configure + switch
+            if sub == "selfhost":
+                url = args[1] if len(args) >= 2 else None
+                api_key = " ".join(args[2:]) if len(args) >= 3 else None
+                return {
+                    "action": "aimodel_selfhost",
+                    "url": url,
+                    "api_key": api_key,
+                }
+            
+            # Remote providers that need/stored API keys
             if sub in {"gpt", "gemini", "copilot"}:
                 # Two modes:
                 #   aimodel gemini <API_KEY>  -> set key + switch
@@ -254,11 +278,4 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
                 "action": "aimodel",
                 "target": " ".join(args),
             }
-        
-        if cmd == "aimodels":
-            # no args; just show the list
-            return {
-                "action": "aimodels",
-            }
 
-        return None

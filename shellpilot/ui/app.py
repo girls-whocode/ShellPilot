@@ -58,6 +58,7 @@ from shellpilot.ai.config import (
     load_ai_config,
     save_ai_config,
     set_provider_and_key,
+    get_effective_ai_settings,
 )
 from shellpilot.ai.remote import (
     analyze_file_remote,
@@ -1401,8 +1402,8 @@ class ShellPilotApp(App):
         is_dir = path.is_dir()
         kind = "directory" if is_dir else "file"
 
-        cfg = load_ai_config()
-        provider = cfg.get("provider", "local")
+        settings = get_effective_ai_settings()
+        provider = settings.get("provider", "local")
 
         # Only query local engine thread count when actually using local
         thread_status: str
@@ -1427,6 +1428,7 @@ class ShellPilotApp(App):
                 "gpt": "OpenAI GPT",
                 "gemini": "Google Gemini",
                 "copilot": "GitHub Copilot",
+                "selfhost": "self-hosted OpenAI backend",
             }.get(provider, provider)
             thread_status = f"🌐 Using remote {provider_name} backend"
 
@@ -1438,6 +1440,8 @@ class ShellPilotApp(App):
             step2_label = "Analyze with Google Gemini"
         elif provider == "copilot":
             step2_label = "Analyze with GitHub Copilot"
+        elif provider == "selfhost":
+            step2_label = "Analyze with self-hosted backend"
         else:
             step2_label = "Analyze with configured AI provider"
 
@@ -1608,8 +1612,8 @@ class ShellPilotApp(App):
         started_at: float | None = None,
     ) -> None:
         """Background worker: run the AI backend on a file, then post the result."""
-        cfg = load_ai_config()
-        provider = cfg.get("provider", "local")
+        settings = get_effective_ai_settings()
+        provider = settings.get("provider", "local")
 
         if provider == "local":
             # --- Local GGUF path ----------------------------------------------
@@ -1670,6 +1674,7 @@ class ShellPilotApp(App):
                 "gpt": "OpenAI GPT",
                 "gemini": "Google Gemini",
                 "copilot": "GitHub Copilot",
+                "selfhost": "self-hosted backend",
             }.get(provider, provider)
 
             self.call_from_thread(
@@ -1741,8 +1746,8 @@ class ShellPilotApp(App):
         started_at: float | None = None,
     ) -> None:
         """Background worker: run the AI backend on a directory manifest."""
-        cfg = load_ai_config()
-        provider = cfg.get("provider", "local")
+        settings = get_effective_ai_settings()
+        provider = settings.get("provider", "local")
 
         if provider == "local":
             try:
@@ -1795,6 +1800,7 @@ class ShellPilotApp(App):
                 "gpt": "OpenAI GPT",
                 "gemini": "Google Gemini",
                 "copilot": "GitHub Copilot",
+                "selfhost": "self-hosted backend",
             }.get(provider, provider)
 
             approx_lines = manifest.count("\n") + 1
@@ -1926,10 +1932,18 @@ class ShellPilotApp(App):
             "gemini": "gemini_api_key",
             "copilot": "copilot_api_key",
         }
+
         if provider == "local":
             lines.append(
                 f"- Local model id: [code]{local_model_id or 'phi-3.5-mini-q4'}[/code]"
             )
+        elif provider == "selfhost":
+            base = cfg.get("selfhost_base_url") or "<not set>"
+            model = cfg.get("selfhost_model") or "<not set>"
+            key = cfg.get("selfhost_api_key")
+            lines.append(f"- Selfhost base URL: [dim]{base}[/dim]")
+            lines.append(f"- Selfhost model   : [code]{model}[/code]")
+            lines.append(f"- Selfhost API key : [dim]{self._mask_api_key(key)}[/dim]")
         else:
             field = field_map.get(provider)
             key = cfg.get(field)
@@ -2231,10 +2245,15 @@ class ShellPilotApp(App):
                 self._handle_aimodel_provider(provider, api_key)
                 return
 
-            elif action == "aimodel_provider_switch":
-                provider = (result.get("provider") or "").strip()
-                self._handle_aimodel_provider_switch(provider)
+            elif action == "aimodel_selfhost":
+                url = (result.get("url") or "").strip()
+                api_key = (result.get("api_key") or "").strip()
+                self._handle_aimodel_selfhost(url or None, api_key or None)
                 return
+
+            elif action == "ai_status":
+                self._show_ai_model_list()
+                return  
 
             else:
                 self._set_status(f"Unknown command: {action}")
@@ -2246,3 +2265,67 @@ class ShellPilotApp(App):
         except Exception as exc:
             # eventually we can route this to OutputPanel too
             self._set_status(f"[error] {exc}")
+
+
+    def _handle_aimodel_selfhost(self, url: Optional[str], api_key: Optional[str]) -> None:
+        """
+        Handle self-hosted backend configuration/switch.
+
+        - `: aimodel selfhost <URL> <APIKEY>` → configure + switch
+        - `: aimodel selfhost`                → just switch to already-configured selfhost
+        """
+        cfg = load_ai_config()
+
+        url = (url or "").strip().rstrip("/")
+        api_key = (api_key or "").strip()
+
+        # If URL or key was provided → configure/overwrite + switch
+        if url or api_key:
+            if not url:
+                self._set_status("Self-host: URL is required when configuring for the first time.")
+                return
+
+            if not api_key:
+                # If user omits a key, fall back to existing or a dummy
+                api_key = cfg.get("selfhost_api_key") or "shellpilot-local"
+
+            cfg["selfhost_base_url"] = url
+            cfg["selfhost_api_key"] = api_key
+            cfg.setdefault("selfhost_model", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B")
+            cfg["provider"] = "selfhost"
+            save_ai_config(cfg)
+
+            if self.output:
+                self.output.update(
+                    "[b]Self-host backend configured and activated.[/b]\n\n"
+                    f"Base URL : [code]{url}[/code]\n"
+                    f"API key  : [dim]{self._mask_api_key(api_key)}[/dim]\n"
+                    f"Model    : [code]{cfg.get('selfhost_model')}[/code]\n"
+                )
+            self._set_status(f"Self-host backend configured and activated → {url}")
+            return
+
+        # No args → just switch to existing selfhost config
+        existing_url = (cfg.get("selfhost_base_url") or "").strip()
+        if not existing_url:
+            self._set_status("Self-host not configured yet. Use ': aimodel selfhost <URL> <APIKEY>' first.")
+            if self.output:
+                self.output.update(
+                    "[b]Self-host not configured.[/b]\n\n"
+                    "First-time setup example:\n"
+                    "  [code]: aimodel selfhost http://127.0.0.1:8000/v1 shellpilot-local[/code]\n"
+                )
+            return
+
+        cfg["provider"] = "selfhost"
+        save_ai_config(cfg)
+
+        if self.output:
+            self.output.update(
+                "[b]AI provider switched to self-host.[/b]\n\n"
+                f"Base URL : [code]{existing_url}[/code]\n"
+                f"Model    : [code]{cfg.get('selfhost_model') or 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'}[/code]\n"
+            )
+        self._set_status(f"Self-host backend activated → {existing_url}")
+
+
