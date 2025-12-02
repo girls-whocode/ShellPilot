@@ -18,6 +18,7 @@ It’s your terminal cockpit. 🚀🐧
 * Automatic session restore
 * Bookmarks (persistent)
 * Keyboard shortcuts for common actions
+* AI integration (By default disabled)
 
 ### 🧠 Smart File Preview
 
@@ -108,29 +109,34 @@ Example layout (yours will evolve):
 ```
 ShellPilot/
 ├── shellpilot/
-│   ├── ui/
-│   │   ├── app.py
-│   │   ├── action_menu.py
-│   │   ├── file_list.py
-│   │   ├── preview.py
-│   │   └── widgets/
+│   ├── ai/
+│   │   ├── config.py
+│   │   ├── engine.py
+│   │   ├── models.py
+│   │   └── remote.py
 │   ├── core/
-│   │   ├── fs_browser.py
 │   │   ├── commands.py
-│   │   └── session.py
+│   │   ├── fs_browser.py
+│   │   ├── git.py
+│   │   └── search.py
+│   ├── ui/
+│   │   ├── action_menu.py
+│   │   ├── app.py
+│   │   ├── app.tcss
+│   │   ├── search_bar.py
+│   │   ├── settings.py
+│   │   └── widgets.py
 │   ├── utils/
-│   │   ├── shell.py
-│   │   └── helpers.py
-│   └── __init__.py
-├── tests/
-│   ├── test_fs.py
-│   ├── test_preview.py
-│   └── test_actions.py
-├── assets/
-│   └── icons/
+│   │   ├── log_highlighter.py
+│   │   ├── ls_colors.py
+│   │   ├── preview.py
+│   │   └── shell.py
+├── models/
+│   └── (empty by default - use action menu to download models)
 ├── README.md
 ├── requirements.txt
 ├── .gitignore
+├── models.json
 └── main.py
 ```
 
@@ -193,6 +199,7 @@ shellpilot
 | ↑ / ↓ | Navigate entries                   |
 | →     | Enter directory / open action menu |
 | ←     | Go up one directory                |
+| `:`   | Action Menu                        |
 | `/`   | Search                             |
 | `r`   | Toggle recursive search            |
 | `f`   | Focus filter bar                   |
@@ -273,4 +280,3 @@ Pull requests are very welcome — especially for:
 # 📝 License
 
 MIT License — free to use, modify, and build upon.
-

@@ -2266,7 +2266,6 @@ class ShellPilotApp(App):
             # eventually we can route this to OutputPanel too
             self._set_status(f"[error] {exc}")
 
-
     def _handle_aimodel_selfhost(self, url: Optional[str], api_key: Optional[str]) -> None:
         """
         Handle self-hosted backend configuration/switch.
@@ -2327,5 +2326,3 @@ class ShellPilotApp(App):
                 f"Model    : [code]{cfg.get('selfhost_model') or 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'}[/code]\n"
             )
         self._set_status(f"Self-host backend activated → {existing_url}")
-
-
