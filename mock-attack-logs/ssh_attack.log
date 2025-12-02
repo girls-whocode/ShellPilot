@@ -1,0 +1,8 @@
+Jan 29 03:14:20 fedora sshd[1128]: Failed password for root from 185.231.69.44 port 45821 ssh2
+Jan 29 03:14:23 fedora sshd[1128]: Failed password for root from 185.231.69.44 port 45821 ssh2
+Jan 29 03:14:25 fedora sshd[1128]: Failed password for root from 185.231.69.44 port 45821 ssh2
+Jan 29 03:14:28 fedora sshd[1128]: Accepted password for root from 185.231.69.44 port 45821 ssh2
+Jan 29 03:14:29 fedora sshd[1128]: PAM session opened for user root by (uid=0)
+Jan 29 03:14:30 fedora sudo[1132]:     root : TTY=pts/0 ; PWD=/root ; USER=root ; COMMAND=/bin/bash
+Jan 29 03:15:11 fedora sshd[1132]: Received disconnect from 185.231.69.44 port 45821:11: disconnected
+Jan 29 03:15:11 fedora sshd[1132]: Disconnected from user root 185.231.69.44 port 45821

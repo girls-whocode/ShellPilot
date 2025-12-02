@@ -1,0 +1,5 @@
+Jan 29 07:32:21 docker[3321]: container exec: nsenter --target 1 --mount --uts --ipc --net --pid
+Jan 29 07:32:22 kernel: cgroup: runc (pid 3321) attempted to access host namespace
+Jan 29 07:32:22 audit[3321]: ANOM_PROMISCUOUS; promisc=1 old_promisc=0 iface=eth0
+Jan 29 07:32:23 audit[3321]: AVC denied { module_request } for pid=3321 comm="bash"
+Jan 29 07:32:24 docker[3322]: container exec: chmod u+s /bin/bash
