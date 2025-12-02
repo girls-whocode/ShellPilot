@@ -10,13 +10,11 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static, ListView, ListItem
 
-
 @dataclass
 class ActionDefinition:
     name: str
     syntax: str
     description: str
-
 
 ACTIONS: list[ActionDefinition] = [
     ActionDefinition(
@@ -65,9 +63,9 @@ ACTIONS: list[ActionDefinition] = [
         "Configure a selfhosted LLM on your own server (stores URL and API key on first use, use again to change it).",
     ),
     ActionDefinition(
-        "aimodels",
-        "aimodels",
-        "Show available AI models with indices and install status.",
+        "settings",
+        "settings",
+        "Open ShellPilot settings (HF token, AI providers, etc.).",
     ),
 ]
 
@@ -232,21 +230,22 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
                 "action": "touch",
                 "name": " ".join(args),
             }
-
-        if cmd in {"ai", "aimodel"} and args and args[0].lower() == "status":
+        
+        if cmd == "settings":
             return {
-                "action": "ai_status",
+                "action": "settings",
             }
 
-        if cmd == "aimodel":
-            if not args:
-                return None
+        if cmd in {"ai", "aimodel"}:
+            # No args OR "status" → show AI config + model list
+            if not args or args[0].lower() == "status":
+                return {
+                    "action": "ai_status",
+                }
 
             sub = args[0].lower()
 
-            # 🔹 NEW: selfhost support
-            # : aimodel selfhost                -> just switch to selfhost (using stored config)
-            # : aimodel selfhost <URL> <APIKEY> -> configure + switch
+            # selfhost support
             if sub == "selfhost":
                 url = args[1] if len(args) >= 2 else None
                 api_key = " ".join(args[2:]) if len(args) >= 3 else None
@@ -255,7 +254,7 @@ class ActionMenu(ModalScreen[dict[str, Any] | None]):
                     "url": url,
                     "api_key": api_key,
                 }
-            
+
             # Remote providers that need/stored API keys
             if sub in {"gpt", "gemini", "copilot"}:
                 # Two modes:

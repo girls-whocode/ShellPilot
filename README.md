@@ -7,6 +7,8 @@ ShellPilot is a next-generation terminal UI designed for system administrators, 
 ShellPilot is engineered to feel *native*, *fast*, and *comfortably Linux-nerdy*.
 It’s your terminal cockpit. 🚀🐧
 
+**NOTE**: This is really ALPHA level development still... I have tested it on 1 laptop, with 2 different OS (Fedora 43 and POP!_OS). I am currently using POP!_OS because of the NVIDIA support. I am building out the self hosted, and local AI modules now. If there are errors, or problems, please open an issue. I will get to them as quickly as possible.
+
 ---
 
 # ✨ **Features**
@@ -194,17 +196,23 @@ shellpilot
 
 # ⌨️ Keybindings
 
-| Key   | Action                             |
-| ----- | ---------------------------------- |
-| ↑ / ↓ | Navigate entries                   |
-| →     | Enter directory / open action menu |
-| ←     | Go up one directory                |
-| `:`   | Action Menu                        |
-| `/`   | Search                             |
-| `r`   | Toggle recursive search            |
-| `f`   | Focus filter bar                   |
-| `b`   | Open bookmarks                     |
-| `q`   | Quit                               |
+| Key   | Action                                 |
+| ----- | -------------------------------------- |
+| ↑ / ↓ | Navigate entries                       |
+| →     | Enter directory / open action menu     |
+| ←     | Go up one directory                    |
+| `?`   | Toggle Help Menu                       |
+| `:`   | Action Command Menu                    |
+| `/`   | Search / Filter (advanced & recursive) |
+| `h`   | Jump to Home Directory                 |
+| `t`   | Trash (recovery)                       |
+| `del` | Delete file or folder to Trash         |
+| `^b`  | Bookmark folder                        |
+| `^j`  | Next Bookmark folder                   |
+| `^,`  | Open Settings Menu                     |
+| `a`   | Open AI explain                        |
+| `e`   | Bookmark folder                        |
+| `q`   | Quit                                   |
 
 More are being added continuously.
 

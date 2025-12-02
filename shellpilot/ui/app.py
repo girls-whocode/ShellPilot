@@ -112,6 +112,7 @@ class ShellPilotApp(App):
         ("?", "toggle_help", "Toggle help"),
         Binding("a", "ai_explain_file", "AI Explain", show=True),
         Binding(":", "open_action_menu", "Command"),
+        Binding("ctrl+p", "open_action_menu", "Command"),
     ]
 
     def __init__(self, start_path: Optional[Path] = None, **kwargs):
@@ -428,27 +429,73 @@ class ShellPilotApp(App):
             self._set_status("Settings: cancelled.")
             return
 
-        # Load current config, update, save
-        cfg = load_config()
+        # --- 1) App-level config (Hugging Face token) ---------------------------
+        app_cfg = load_config()
         hf_token = result.get("hf_token")
 
-        cfg.hf_token = hf_token
-        save_config(cfg)
+        app_cfg.hf_token = hf_token
+        save_config(app_cfg)
 
-        masked = (
-            f"{hf_token[:6]}…{hf_token[-4:]}"
-            if hf_token and len(hf_token) > 10
-            else ("<empty>" if not hf_token else "********")
-        )
+        # --- 2) AI provider config (ai.json) ------------------------------------
+        ai_cfg = load_ai_config()
+
+        def _normalize(val: Any) -> str | None:
+            if val is None:
+                return None
+            s = str(val).strip()
+            return s or None
+
+        openai_api_key = _normalize(result.get("openai_api_key"))
+        gemini_api_key = _normalize(result.get("gemini_api_key"))
+        copilot_api_key = _normalize(result.get("copilot_api_key"))
+        selfhost_base_url = _normalize(result.get("selfhost_base_url"))
+        selfhost_model = _normalize(result.get("selfhost_model"))
+        selfhost_api_key = _normalize(result.get("selfhost_api_key"))
+
+        # Only update fields the user actually touched (non-empty in the dialog).
+        if openai_api_key is not None:
+            ai_cfg["openai_api_key"] = openai_api_key
+        if gemini_api_key is not None:
+            ai_cfg["gemini_api_key"] = gemini_api_key
+        if copilot_api_key is not None:
+            ai_cfg["copilot_api_key"] = copilot_api_key
+
+        # Selfhost: if a base URL is provided, we treat this as a full update.
+        if selfhost_base_url is not None:
+            ai_cfg["selfhost_base_url"] = selfhost_base_url
+            if selfhost_api_key is not None:
+                ai_cfg["selfhost_api_key"] = selfhost_api_key
+            if selfhost_model is not None:
+                ai_cfg["selfhost_model"] = selfhost_model
+        else:
+            # No new URL → allow updating key / model only if they were provided
+            if selfhost_api_key is not None:
+                ai_cfg["selfhost_api_key"] = selfhost_api_key
+            if selfhost_model is not None:
+                ai_cfg["selfhost_model"] = selfhost_model
+
+        save_ai_config(ai_cfg)
+
+        # --- 3) Feedback ---------------------------------------------------------
+        def mask(key: str | None) -> str:
+            return self._mask_api_key(key)
 
         if self.output:
             self.output.update(
                 "[b]Settings updated[/b]\n\n"
-                f"Hugging Face token: {masked}\n\n"
-                "[dim]Token is stored locally in your ShellPilot config file.[/dim]"
+                f"Hugging Face token : {mask(hf_token)}\n"
+                f"OpenAI API key     : {mask(ai_cfg.get('openai_api_key'))}\n"
+                f"Gemini API key     : {mask(ai_cfg.get('gemini_api_key'))}\n"
+                f"Copilot API token  : {mask(ai_cfg.get('copilot_api_key'))}\n"
+                f"Selfhost base URL  : [dim]{ai_cfg.get('selfhost_base_url') or '<not set>'}[/dim]\n"
+                f"Selfhost model     : [code]{ai_cfg.get('selfhost_model') or '<not set>'}[/code]\n"
+                f"Selfhost API key   : {mask(ai_cfg.get('selfhost_api_key'))}\n\n"
+                "[dim]Keys are stored locally in ~/.config/shellpilot/ai.json "
+                "(mode 600) and Hugging Face token in your main ShellPilot config.[/dim]"
             )
 
-        self._set_status("Settings saved (Hugging Face token updated).")
+        self._set_status("Settings saved (HF + AI provider keys updated).")
+
 
     # ---------- Helpers ----------
     def _mask_api_key(self, key: str | None) -> str:
@@ -2254,6 +2301,10 @@ class ShellPilotApp(App):
             elif action == "ai_status":
                 self._show_ai_model_list()
                 return  
+            
+            elif action == "settings":
+                self.action_open_settings()
+                return
 
             else:
                 self._set_status(f"Unknown command: {action}")

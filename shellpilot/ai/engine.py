@@ -52,13 +52,9 @@ class AIEngine:
         n_threads = max(1, (os.cpu_count() or 4))
         self.n_threads = n_threads
 
-        # Ensure model file exists (or ask caller to download)
-        if not self.model_path.is_file():
-            raise FileNotFoundError(
-                f"AI model '{self.model_spec.name}' not found at {self.model_path}."
-            )
-
-        self._llm = self._create_llm()
+        # Do NOT require the file yet — it may need to be downloaded.
+        # We'll lazily create the Llama instance when we first run inference.
+        self._llm: Optional[Llama] = None
 
     def _create_llm(self) -> Llama:
         return Llama(
@@ -72,12 +68,20 @@ class AIEngine:
     def _run(
         self,
         prompt: str,
-        max_tokens: int = 2048,   # was 320
+        max_tokens: int = 2048,
         temperature: float = 0.15,
     ) -> str:
         """
         Call the model with a plain prompt and return the text output.
         """
+        # Lazily load the model the first time we actually need it
+        if self._llm is None:
+            if not self.model_path.is_file():
+                raise FileNotFoundError(
+                    f"AI model '{self.model_spec.name}' not found at {self.model_path}."
+                )
+            self._llm = self._create_llm()
+
         result = self._llm(
             prompt,
             max_tokens=max_tokens,
