@@ -26,7 +26,7 @@ except ImportError:
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Static, Footer, Input, ListView
+from textual.widgets import Static, Input, ListView, Footer
 from textual.containers import Horizontal, Vertical, VerticalScroll
 
 from shellpilot.core.fs_browser import list_dir  # still used in action menu
@@ -90,6 +90,21 @@ def _has_passwordless_sudo() -> bool:
         return False
     except Exception:
         return False
+
+class ShellPilotFooter(Footer):
+    """Custom footer used as ShellPilot's status bar."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.message: str = ""
+
+    def set_message(self, message: str) -> None:
+        self.message = message
+        self.refresh()
+
+    def render(self):
+        # Ignore default keybinding rendering and just show our status text
+        return Text(self.message or "")
 
 class ShellPilotApp(App):
     """Main Textual application for ShellPilot."""
@@ -156,9 +171,8 @@ class ShellPilotApp(App):
         self.output: Optional[OutputPanel] = None
         self.breadcrumb: Optional[Static] = None
         self.search_input: Optional[Input] = None
-        self.status: Optional[Static] = None
+        self.footer: Optional[ShellPilotFooter] = None
         self.preview_container: Optional[VerticalScroll] = None
-        self.footer_bar: Optional[Footer] = None
 
         self._last_command: Optional[ShellCommand] = None
 
@@ -314,7 +328,7 @@ class ShellPilotApp(App):
 
     def _update_status_with_git(self) -> None:
         """Render the current base status plus AI hardware + Git info."""
-        if not self.status:
+        if not self.footer:
             return
 
         git_part = self._format_git_status_summary()
@@ -329,7 +343,9 @@ class ShellPilotApp(App):
             parts.append(git_part)
 
         full = "    |    ".join(parts)
-        self.status.update(full)
+
+        # Update the footer widget
+        self.footer.set_message(full)
 
     # ---------- Trash helpers ----------
     def _init_trash_dir(self) -> tuple[Path, Path]:
@@ -381,47 +397,14 @@ class ShellPilotApp(App):
             return self._current_dir().resolve() == self.trash_dir.resolve()
         except Exception:
             return False
-        
-    def _update_footer_bindings_visibility(self) -> None:
-        """
-        Show 'r' / 'E' in the footer only when viewing the trash.
 
-        The bindings still exist everywhere, but their labels are hidden
-        from the Footer outside trash view.
-        """
-        in_trash = self._in_trash_view()
-
-        # Try to be compatible across Textual versions:
-        # - Some expose `self.bindings` (BindingMap / Bindings)
-        # - Some use `self._bindings`
-        bindings_obj = getattr(self, "bindings", None) or getattr(self, "_bindings", None)
-        if bindings_obj is None:
-            return
-
-        # Many versions expose the actual list as `.bindings`
-        seq = getattr(bindings_obj, "bindings", None)
-        if seq is None:
-            # Fallback: maybe the object itself is iterable
-            seq = bindings_obj
-
-        try:
-            for binding in seq:
-                # binding is a textual.binding.Binding
-                if getattr(binding, "key", None) in ("r", "E"):
-                    # Only show in trash view
-                    setattr(binding, "show", in_trash)
-        except TypeError:
-            # bindings_obj wasn't iterable after all; bail quietly
-            return
-
-        # Ask the Footer to re-render with updated show flags
-        if self.footer_bar:
-            self.footer_bar.refresh()
-
+    # ---------- Layout ----------
     # ---------- Layout ----------
     def compose(self) -> ComposeResult:
         """Compose the UI layout."""
-        with Horizontal():
+
+        # MAIN ROW: left | output | preview
+        with Horizontal(id="main-row"):
             # LEFT PANE: breadcrumb + search + file list
             with Vertical(id="left-pane"):
                 self.breadcrumb = Static("", id="breadcrumb")
@@ -436,40 +419,12 @@ class ShellPilotApp(App):
                 self.file_list = FileList(self.start_path, id="files")
                 yield self.file_list
 
-            # MIDDLE: actual output of the last command / code preview
+            # MIDDLE: command output / AI output
             with VerticalScroll(id="output-container"):
                 self.output = OutputPanel("No command executed yet.")
                 yield self.output
 
-            # RIGHT: help / command explanation (less in-your-face)
-            with VerticalScroll(id="preview-container") as preview_container:
-                self.preview = CommandPreview(
-                    "Select a directory or file to see a command."
-                )
-                yield self.preview
-            self.preview_container = preview_container
-
-        with Horizontal():
-            # LEFT PANE: breadcrumb + search + file list
-            with Vertical(id="left-pane"):
-                self.breadcrumb = Static("", id="breadcrumb")
-                yield self.breadcrumb
-
-                self.search_input = Input(
-                    placeholder="Filter files (e.g. '*.log', 'error', '// for recursive)…",
-                    id="search",
-                )
-                yield self.search_input
-
-                self.file_list = FileList(self.start_path, id="files")
-                yield self.file_list
-
-            # MIDDLE: actual output of the last command / code preview
-            with VerticalScroll(id="output-container"):
-                self.output = OutputPanel("No command executed yet.")
-                yield self.output
-
-            # RIGHT: help / command explanation (less in-your-face)
+            # RIGHT: command preview / help
             with VerticalScroll(id="preview-container") as preview_container:
                 self.preview = CommandPreview(
                     "Select a directory or file to see a command."
@@ -477,14 +432,9 @@ class ShellPilotApp(App):
                 yield self.preview
                 self.preview_container = preview_container
 
-        # BOTTOM BAR: status line + footer key bindings
-        with Vertical(id="bottom-bar"):
-            self.status = Static("", id="status")
-            yield self.status
-
-            self.footer_bar = Footer()
-            yield self.footer_bar
-
+        # STATUS BAR (now the only bottom bar)
+        self.footer = ShellPilotFooter(id="status")
+        yield self.footer
 
     def on_mount(self) -> None:
         """App mounted: show an initial command for the start directory."""
@@ -534,7 +484,7 @@ class ShellPilotApp(App):
 
             self.refresh(layout=True)
 
-        self._update_footer_bindings_visibility()
+        self._set_status("Status bar online 🧠 (this should be above the key bindings)")
 
     def action_open_settings(self) -> None:
         """Open the Settings dialog (HF token, etc.)."""
@@ -786,7 +736,6 @@ class ShellPilotApp(App):
         # Don't touch the output panel here – keep previous command / AI output.
         # Just refresh session + footer + context-aware status/help line.
         self._save_session()
-        self._update_footer_bindings_visibility()
         self._update_search_status()
 
     def _get_selected_path(self) -> Optional[Path]:
@@ -2441,7 +2390,7 @@ class ShellPilotApp(App):
 
     def _update_search_status(self) -> None:
         """Update the status bar to reflect the current search query."""
-        if not self.status:
+        if not self.footer:
             return
 
         q = self._search_query

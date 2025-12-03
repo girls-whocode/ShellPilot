@@ -4,16 +4,16 @@ Screen {
 }
 
 /* Main row: left | output | help */
-Horizontal {
-    /* Let it fill space above the bottom bar */
+#main-row {
+    height: 1fr;   /* take everything above the status bar */
 }
 
 /* LEFT PANE LAYOUT */
 
 #left-pane {
-    width: 1fr;          /* was 30% */
-    min-width: 24;
-    border-right: solid #444444;
+    background: #0a0d14;
+    width: 1fr;
+    border-right: solid #222222;
 }
 
 #breadcrumb {
@@ -23,14 +23,15 @@ Horizontal {
 }
 
 #search {
-    height: 1;              /* 1 row tall */
+    height: 1;
     min-height: 1;
-    padding: 0 1;           /* no vertical padding, just a bit left/right */
-    margin-bottom: 1;       /* small gap before the file list */
-    border: none;           /* optional: remove border if it feels bulky */
+    padding: 0 1;
+    margin-bottom: 1;
+    border: none;
     content-align: left middle;
 }
 
+/* in case you re-enable the separate search-bar widget later */
 #search-bar {
     display: none;
 }
@@ -46,14 +47,14 @@ Horizontal {
 /* MIDDLE + RIGHT PANES */
 
 #output-container {
-    width: 1fr;          /* was 45% */
+    width: 1fr;
     min-width: 32;
     padding: 1 2;
     border-right: solid #333333;
 }
 
 #preview-container {
-    width: 1fr;          /* was 25% */
+    width: 1fr;
     min-width: 24;
     padding: 1 2;
 }
@@ -66,26 +67,21 @@ OutputPanel {
     text-opacity: 0.95;
 }
 
-/* BOTTOM BAR: holds status + footer */
+/* BOTTOM BAR: status + footer keybindings */
 
 #bottom-bar {
-    dock: bottom;      /* stick this whole thing to the bottom */
-    layout: vertical;  /* status on top, footer below */
-    /* height auto = 2 lines, because of the children */
+    height: 2;          /* exactly two rows: status + footer */
+    min-height: 2;
+    layout: vertical;   /* stack children */
 }
 
-/* STATUS BAR (info line) */
+/* STATUS BAR – replaces the old key bar */
 #status {
+    dock: bottom;
     height: 1;
+    min-height: 1;
     padding: 0 1;
     border-top: solid #333333;
     color: #bbbbff;
-    background: #111118;   /* keep if you like the subtle strip */
+    background: #111118;
 }
-
-/* FOOTER (key bindings) */
-Footer {
-    height: 1;
-    dock: none;   /* it's inside #bottom-bar now, no self-docking */
-}
-
