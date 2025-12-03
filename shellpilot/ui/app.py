@@ -35,7 +35,6 @@ from shellpilot.core.commands import (
     build_view_file_command,
     ShellCommand,
 )
-
 from shellpilot.utils.shell import run_shell_command
 from shellpilot.ui.action_menu import ActionMenu
 from shellpilot.utils.ls_colors import style_for_path
@@ -285,46 +284,20 @@ class ShellPilotApp(App):
         self._update_status_with_git()
 
     def _format_ai_hardware_status(self) -> str:
-        """
-        Return a compact AI provider + hardware segment for the status bar, e.g.:
-
-          AI: GPT 🧠 GPU
-          AI: LOC 🧠 CPU
-          AI: SRV
-
-        This uses the effective provider (local/GPT/Gemini/Copilot/selfhost)
-        and whatever hardware info we've cached.
-        """
-        from shellpilot.ai.config import get_effective_ai_settings
-
-        settings = get_effective_ai_settings()
-        provider = (settings.get("provider") or "local").lower()
-
-        provider_tag = {
-            "local": "LOC",
-            "gpt": "GPT",
-            "gemini": "GEM",
-            "copilot": "COP",
-            "selfhost": "SRV",
-        }.get(provider, provider.upper())
-
+        """Return a tiny 'CPU vs GPU' segment for the status bar."""
         hw = getattr(self, "_ai_hardware", None)
-        if hw:
-            mode, _name = hw
-            if mode == "gpu":
-                hw_tag = "🧠 GPU"
-            elif mode == "cpu":
-                hw_tag = "🧠 CPU"
-            else:
-                hw_tag = ""
-        else:
-            hw_tag = ""
+        if not hw:
+            return ""
 
-        if hw_tag:
-            return f"AI: {provider_tag} {hw_tag}"
-        else:
-            # Even if we don't know CPU vs GPU, still show which backend is active
-            return f"AI: {provider_tag}"
+        mode, _name = hw
+
+        if mode == "gpu":
+            # Small, readable, works in most fonts
+            return "🧠 GPU"
+        elif mode == "cpu":
+            return "🧠 CPU"
+
+        return ""
 
     def _update_status_with_git(self) -> None:
         """Render the current base status plus AI hardware + Git info."""
@@ -432,16 +405,21 @@ class ShellPilotApp(App):
                 yield self.preview
                 self.preview_container = preview_container
 
+<<<<<<< HEAD
         # STATUS BAR (now the only bottom bar)
         self.footer = ShellPilotFooter(id="status")
         yield self.footer
+=======
+        # STATUS BAR
+        self.status = Static("", id="status")
+        yield self.status
+
+        self.footer_bar = Footer()
+        yield self.footer_bar
+>>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 
     def on_mount(self) -> None:
         """App mounted: show an initial command for the start directory."""
-
-        # Apply LS_COLORS preferences from config before we render the file list
-        app_cfg = load_config()
-
         self._update_breadcrumb()
         if self.preview:
             cmd = build_ls_command(self.start_path)
@@ -501,19 +479,6 @@ class ShellPilotApp(App):
         hf_token = result.get("hf_token")
 
         app_cfg.hf_token = hf_token
-
-        # LS_COLORS options (with safe fallbacks)
-        ls_mode = result.get("ls_colors_mode")
-        ls_scheme = result.get("ls_colors_scheme")
-        ls_dark = result.get("ls_dark_background")
-
-        if ls_mode is not None:
-            app_cfg.ls_colors_mode = ls_mode
-        if ls_scheme is not None:
-            app_cfg.ls_colors_scheme = ls_scheme
-        if ls_dark is not None:
-            app_cfg.ls_dark_background = bool(ls_dark)
-
         save_config(app_cfg)
 
         # --- 2) AI provider config (ai.json) ------------------------------------
@@ -563,16 +528,7 @@ class ShellPilotApp(App):
 
         save_ai_config(ai_cfg)
 
-        # --- 3) Apply LS_COLORS preferences and refresh file list ---------
-        try:
-            # Re-render current directory so colors take effect immediately
-            if self.file_list:
-                self._set_directory(self._current_dir())
-        except Exception:
-            # Non-fatal: don't crash if something goes weird with colors
-            pass
-
-        # --- 4) Feedback ---------------------------------------------------------
+        # --- 3) Feedback ---------------------------------------------------------
         def mask(key: str | None) -> str:
             return self._mask_api_key(key)
 
@@ -591,6 +547,7 @@ class ShellPilotApp(App):
             )
 
         self._set_status("Settings saved (HF + AI provider keys updated).")
+
 
     # ---------- Helpers ----------
     def _mask_api_key(self, key: str | None) -> str:
@@ -614,45 +571,22 @@ class ShellPilotApp(App):
         path = self._current_dir()
         self.breadcrumb.update(f"[b]Path:[/b] {path}")
 
-    def _find_git_root(self, path: Path) -> Path | None:
-        """
-        Walk up from `path` until we find a Git repo, or hit filesystem root.
-        Returns the repo root directory, or None if not in a repo.
-        """
-        current = path
-        while True:
-            try:
-                if is_git_repo(current):
-                    return current
-            except Exception:
-                # If git detection explodes, just treat as non-repo
-                return None
-
-            if current.parent == current:
-                # Reached filesystem root
-                return None
-            current = current.parent
-
     def _refresh_git_state(self, path: Path) -> None:
         """
         Update Git state (in/out of repo + status summary) for the given path.
-        We walk upward so subdirs inside a repo still show status.
         """
         try:
-            repo_root = self._find_git_root(path)
+            self.in_git_repo = is_git_repo(path)
         except Exception:
-            repo_root = None
-
-        if repo_root is None:
             self.in_git_repo = False
-            self.git_status = None
-        else:
-            self.in_git_repo = True
+
+        if self.in_git_repo:
             try:
-                # get_git_status now runs against the repo root
-                self.git_status = get_git_status(repo_root)
+                self.git_status = get_git_status(path)
             except Exception:
                 self.git_status = None
+        else:
+            self.git_status = None
 
         # Re-render the status bar with the new Git info
         self._update_status_with_git()
@@ -733,10 +667,23 @@ class ShellPilotApp(App):
             self._last_command = cmd
             self.preview.show_command(cmd)
 
-        # Don't touch the output panel here – keep previous command / AI output.
-        # Just refresh session + footer + context-aware status/help line.
+        # IMPORTANT:
+        # Don't touch the output panel here.
+        # We want AI analysis or previous command output to persist
+        # even when the user navigates to a different directory.
+        #
+        # The output will be updated only when the user:
+        # - presses Enter (action_run_command)
+        # - runs AI explain (action_ai_explain_file)
+        # - previews a file / log / image, etc.
+
+        self._set_status(f"In directory: {path}")
         self._save_session()
+<<<<<<< HEAD
         self._update_search_status()
+=======
+        self._update_footer_bindings_visibility()
+>>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 
     def _get_selected_path(self) -> Optional[Path]:
         """Return the Path of the currently selected item in the file list."""

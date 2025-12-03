@@ -1,11 +1,17 @@
 Screen {
     layout: vertical;
     background: #05060a;
+    color: #e0e0f0;
 }
 
 /* Main row: left | output | help */
+<<<<<<< HEAD
 #main-row {
     height: 1fr;   /* take everything above the status bar */
+=======
+Horizontal {
+    height: 1fr;
+>>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 }
 
 /* LEFT PANE LAYOUT */
@@ -67,6 +73,7 @@ OutputPanel {
     text-opacity: 0.95;
 }
 
+<<<<<<< HEAD
 /* BOTTOM BAR: status + footer keybindings */
 
 #bottom-bar {
@@ -76,6 +83,10 @@ OutputPanel {
 }
 
 /* STATUS BAR – replaces the old key bar */
+=======
+/* STATUS BAR */
+
+>>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 #status {
     dock: bottom;
     height: 1;
@@ -83,5 +94,13 @@ OutputPanel {
     padding: 0 1;
     border-top: solid #333333;
     color: #bbbbff;
+<<<<<<< HEAD
     background: #111118;
 }
+=======
+}
+
+Footer {
+    dock: bottom;
+}
+>>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
