@@ -4,8 +4,8 @@ Screen {
 }
 
 /* Main row: left | output | help */
-/* Let it naturally fill the remaining space above the status/footer */
 Horizontal {
+    /* Let it fill space above the bottom bar */
 }
 
 /* LEFT PANE LAYOUT */
@@ -66,26 +66,26 @@ OutputPanel {
     text-opacity: 0.95;
 }
 
-/* BOTTOM BAR CONTAINER: holds status + footer */
+/* BOTTOM BAR: holds status + footer */
 
 #bottom-bar {
     dock: bottom;      /* stick this whole thing to the bottom */
-    layout: vertical;  /* stack status over footer */
-    /* no fixed height – it will be 2 lines because of children */
+    layout: vertical;  /* status on top, footer below */
+    /* height auto = 2 lines, because of the children */
 }
 
-/* STATUS BAR (always present) */
+/* STATUS BAR (info line) */
 #status {
     height: 1;
     padding: 0 1;
     border-top: solid #333333;
     color: #bbbbff;
-    background: #111118;   /* keep if you like the darker strip */
+    background: #111118;   /* keep if you like the subtle strip */
 }
 
-/* FOOTER = keybinding bar */
+/* FOOTER (key bindings) */
 Footer {
     height: 1;
-    dock: none;           /* it’s inside #bottom-bar now, don’t self-dock */
+    dock: none;   /* it's inside #bottom-bar now, no self-docking */
 }
 

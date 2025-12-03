@@ -449,13 +449,42 @@ class ShellPilotApp(App):
                 yield self.preview
             self.preview_container = preview_container
 
-        # STATUS + FOOTER BARS (stacked vertically at the bottom)
+        with Horizontal():
+            # LEFT PANE: breadcrumb + search + file list
+            with Vertical(id="left-pane"):
+                self.breadcrumb = Static("", id="breadcrumb")
+                yield self.breadcrumb
+
+                self.search_input = Input(
+                    placeholder="Filter files (e.g. '*.log', 'error', '// for recursive)…",
+                    id="search",
+                )
+                yield self.search_input
+
+                self.file_list = FileList(self.start_path, id="files")
+                yield self.file_list
+
+            # MIDDLE: actual output of the last command / code preview
+            with VerticalScroll(id="output-container"):
+                self.output = OutputPanel("No command executed yet.")
+                yield self.output
+
+            # RIGHT: help / command explanation (less in-your-face)
+            with VerticalScroll(id="preview-container") as preview_container:
+                self.preview = CommandPreview(
+                    "Select a directory or file to see a command."
+                )
+                yield self.preview
+                self.preview_container = preview_container
+
+        # BOTTOM BAR: status line + footer key bindings
         with Vertical(id="bottom-bar"):
             self.status = Static("", id="status")
             yield self.status
 
             self.footer_bar = Footer()
             yield self.footer_bar
+
 
     def on_mount(self) -> None:
         """App mounted: show an initial command for the start directory."""
