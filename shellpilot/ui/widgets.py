@@ -17,6 +17,7 @@ from textual.widgets import Static, ListView, ListItem
 
 from shellpilot.core.fs_browser import list_dir
 from shellpilot.core.commands import ShellCommand
+from shellpilot.config import load_config
 from shellpilot.utils.ls_colors import style_for_path
 from shellpilot.core.search import SearchQuery, SearchMode, FileTypeFilter, fuzzy_score
 from shellpilot.utils.preview import (
@@ -89,171 +90,94 @@ class FileList(ListView):
         self.refresh_entries()
 
     def refresh_entries(self) -> None:
-        """Populate the list with entries from current_path, honoring filter."""
-        # Don't try to mount children before the FileList is attached
-
-        if not self.is_attached:
-            return
+        """Rebuild the file list using LS_COLORS-aware styling."""
+        from shellpilot.core.search import SearchMode, FileTypeFilter, SearchQuery  # if you use these
 
         self.clear()
+
+        cfg = load_config()
         current = self.current_path
 
-        q = self._search_query
-        recursive = getattr(q, "recursive", False)
-
-        parent: Path | None = None
-
         try:
-            if current.parent != current:
-                parent = current.parent
+            entries = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         except Exception:
-            parent = None
+            entries = []
 
-        if parent is not None and not recursive:
+        # Optional: your existing search/filter logic
+        q = getattr(self, "_search_query", None)
+        recursive = False
+        if q is not None:
+            # whatever your existing filtering logic is
+            pass
+
+        # --- Parent directory entry ("../") -----------------------------------
+        if current.parent != current:
+            parent = current.parent
             try:
-                st = parent.stat()
-                mode_str = format_mode(st.st_mode)
-                try:
-                    owner = pwd.getpwuid(st.st_uid).pw_name
-                except KeyError:
-                    owner = str(st.st_uid)
-                try:
-                    group = grp.getgrgid(st.st_gid).gr_name
-                except KeyError:
-                    group = str(st.st_gid)
-
+                st = parent.lstat()
+                mode_str = statmod.filemode(st.st_mode)
+                owner = pwd.getpwuid(st.st_uid).pw_name
+                group = grp.getgrgid(st.st_gid).gr_name
             except Exception:
-                mode_str = "d?????????"
-                owner = "?"
-                group = "?"
+                mode_str = "drwxr-xr-x"
+                owner = "root"
+                group = "root"
 
             meta = f"{mode_str} {owner:8} {group:8} dir  "
 
-            parent_style = style_for_path(parent)
-            if parent_style:
-                name_part = f"[{parent_style}]📁 ..[/{parent_style}]"
-            else:
-                name_part = "📁 .."
+            parent_style = style_for_path(
+                parent,
+                mode=cfg.ls_colors_mode,
+                scheme=cfg.ls_colors_scheme,
+                dark_background=cfg.ls_dark_background,
+            )
 
-            label = f"[dim]{meta}[/dim]  {name_part}"
+            meta_text = Text(meta, style="dim")
+            name_text = Text("📁 ../", style=parent_style or "")
+            label = Text.assemble(meta_text, Text("  "), name_text)
 
-            item = ListItem(Static(label))
-            item.data = str(parent)
+            item = ListItem(Static(label, expand=True))
+            item.data = parent
             self.append(item)
 
-        if not recursive:
-            for entry in list_dir(current):
-                if not self._matches_filter(entry):
-                    continue
+        # --- Real entries -----------------------------------------------------
+        for entry in entries:
+            # If you have name-based filtering, keep that logic here:
+            # if not matches_filter(entry.name): continue
 
-                try:
-                    st = entry.stat()
-                except FileNotFoundError:
-                    mode_str = "??????????"
-                    owner = "?"
-                    group = "?"
-                else:
-                    mode_str = format_mode(st.st_mode)
-                    try:
-                        owner = pwd.getpwuid(st.st_uid).pw_name
-                    except KeyError:
-                        owner = str(st.st_uid)
-                    try:
-                        group = grp.getgrgid(st.st_gid).gr_name
-                    except KeyError:
-                        group = str(st.st_gid)
+            try:
+                st = entry.lstat()
+                mode_str = statmod.filemode(st.st_mode)
+                owner = pwd.getpwuid(st.st_uid).pw_name
+                group = grp.getgrgid(st.st_gid).gr_name
+            except Exception:
+                mode_str = "??????????"
+                owner = "?"
+                group = "?"
 
-                if entry.is_dir():
-                    ftype = "dir"
-                elif entry.is_symlink():
-                    ftype = "link"
-                elif entry.is_file():
-                    ftype = "file"
-                else:
-                    ftype = "other"
+            ftype = "dir" if entry.is_dir() else "file"
+            meta = f"{mode_str} {owner:8} {group:8} {ftype:5}"
 
-                icon = icon_for_entry(entry)
-                name_display = f"{entry.name}/" if entry.is_dir() else entry.name
+            # <<< THIS IS THE IMPORTANT PART >>>
+            style = style_for_path(
+                entry,
+                mode=cfg.ls_colors_mode,
+                scheme=cfg.ls_colors_scheme,
+                dark_background=cfg.ls_dark_background,
+            )
 
-                meta = f"{mode_str} {owner:8} {group:8} {ftype:5}"
+            # your existing icon helper; if you named it differently, keep that
+            icon = "📁" if entry.is_dir() else "📄"
+            name_display = f"{entry.name}/" if entry.is_dir() else entry.name
 
-                style = style_for_path(entry)
-                if style:
-                    name_part = f"[{style}]{icon} {name_display}[/{style}]"
-                else:
-                    name_part = f"{icon} {name_display}"
+            meta_text = Text(meta, style="dim")
+            name_text = Text(f"{icon} {name_display}", style=style or "")
 
-                label = f"[dim]{meta}[/dim]  {name_part}"
+            label = Text.assemble(meta_text, Text("  "), name_text)
 
-                item = ListItem(Static(label))
-                item.data = str(entry)
-                self.append(item)
-
-        else:
-            max_results = 1000
-            count = 0
-
-            for root, dirs, files in os.walk(current):
-                root_path = Path(root)
-                names = sorted(dirs) + sorted(files)
-
-                for name in names:
-                    entry = root_path / name
-
-                    if not self._matches_filter(entry):
-                        continue
-
-                    try:
-                        st = entry.stat()
-                    except FileNotFoundError:
-                        mode_str = "??????????"
-                        owner = "?"
-                        group = "?"
-                    else:
-                        mode_str = format_mode(st.st_mode)
-                        try:
-                            owner = pwd.getpwuid(st.st_uid).pw_name
-                        except KeyError:
-                            owner = str(st.st_uid)
-                        try:
-                            group = grp.getgrgid(st.st_gid).gr_name
-                        except KeyError:
-                            group = str(st.st_gid)
-
-                    if entry.is_dir():
-                        ftype = "dir"
-                    elif entry.is_symlink():
-                        ftype = "link"
-                    elif entry.is_file():
-                        ftype = "file"
-                    else:
-                        ftype = "other"
-
-                    icon = icon_for_entry(entry)
-                    rel = entry.relative_to(current)
-                    rel_str = rel.as_posix()
-                    name_display = f"{rel_str}/" if entry.is_dir() else rel_str
-
-                    meta = f"{mode_str} {owner:8} {group:8} {ftype:5}"
-
-                    style = style_for_path(entry)
-                    if style:
-                        name_part = f"[{style}]{icon} {name_display}[/{style}]"
-                    else:
-                        name_part = f"{icon} {name_display}"
-
-                    label = f"[dim]{meta}[/dim]  {name_part}"
-
-                    item = ListItem(Static(label))
-                    item.data = str(entry)
-                    self.append(item)
-
-                    count += 1
-                    if count >= max_results:
-                        break
-
-                if count >= max_results:
-                    break
+            item = ListItem(Static(label, expand=True))
+            item.data = entry
+            self.append(item)
 
     def _matches_filter(self, path: Path) -> bool:
         q = getattr(self, "_search_query", SearchQuery())

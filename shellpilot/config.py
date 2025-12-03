@@ -22,18 +22,34 @@ CONFIG_PATH = _default_config_path()
 @dataclass
 class AppConfig:
     """ShellPilot persistent configuration."""
+
+    # Existing --------------------------------------------------
     hf_token: Optional[str] = None  # Hugging Face token for gated models
+
+    # NEW: LS_COLORS / file color theme settings ----------------
+    # Mode: 'env', 'env_with_boost', or 'scheme'
+    ls_colors_mode: str = "env_with_boost"
+
+    # Built-in scheme name (only used when mode='scheme')
+    ls_colors_scheme: str = "classic"
+
+    # If True, boost dark terminal colors for better readability
+    ls_dark_background: bool = True
 
 
 def load_config() -> AppConfig:
-    """Load config from disk, or return a default config if missing/invalid."""
+    """Load config from disk, or return defaults if missing/invalid."""
     try:
         if CONFIG_PATH.is_file():
             data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+            # Merge disk data with defaults safely:
+            # Missing fields will take the dataclass defaults.
             return AppConfig(**data)
     except Exception:
-        # Don't blow up ShellPilot if config is corrupt
+        # Don't crash ShellPilot if config is corrupt.
         pass
+
     return AppConfig()
 
 

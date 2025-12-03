@@ -205,6 +205,7 @@ Upcoming plugin-style extension points:
 * Custom AI analysis engines
 * Search strategy modules
 * Panel layout extensions
+* Customizable Colors for Users
 
 ---
 

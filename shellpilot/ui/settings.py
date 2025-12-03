@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from textual.app import ComposeResult
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Static, Input, Button
+from textual.widgets import Static, Input, Button, Select, Checkbox
 
 from shellpilot.config import load_config
 from shellpilot.ai.config import load_ai_config
@@ -21,8 +21,13 @@ class SettingsResult:
     selfhost_api_key: Optional[str] = None
     selfhost_model: Optional[str] = None
 
+    # New: LS_COLORS-related preferences
+    ls_colors_mode: Optional[str] = None
+    ls_colors_scheme: Optional[str] = None
+    ls_dark_background: Optional[bool] = None
+
 class SettingsScreen(ModalScreen[dict[str, Any] | None]):
-    """Simple settings dialog for ShellPilot (currently: Hugging Face token)."""
+    """Simple settings dialog for ShellPilot (AI + LS_COLORS settings)."""
 
     CSS = """
     SettingsScreen {
@@ -32,24 +37,70 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
     #settings-dialog {
         width: 70%;
         max-width: 90;
+        max-height: 80%;
         padding: 1 2;
         border: round $accent;
         background: $panel;
+        overflow-y: auto;
     }
 
     #settings-title {
         content-align: center middle;
         padding-bottom: 1;
+        text-style: bold;
     }
 
     #settings-subtitle {
         color: $text-muted;
         padding-bottom: 1;
+        height: auto;
     }
 
-    #hf-token-label {
+    /* Section headings (Hugging Face, OpenAI, LS_COLORS, etc) */
+    .settings-section-title {
         padding-top: 1;
-        padding-bottom: 1;
+        padding-bottom: 0;
+        text-style: bold;
+        color: $accent;
+    }
+
+    /* Labels above inputs */
+    .settings-label {
+        padding-top: 1;
+        padding-bottom: 0;
+        color: $text-muted;
+    }
+
+     /* Inputs & selects: keep them neat and full-width */
+    Input {
+        width: 100%;
+        padding: 0 1;
+        border: tall $accent;
+    }
+    
+    Select {
+        width: 100%;
+        padding: 0 1;
+        height: 5;
+        border: tall $accent;
+    }
+
+    /* Make sure text inside selects is visible */
+    Select {
+        color: $text;
+    }
+
+    /* Focus styling */
+    Input:focus, Select:focus {
+        border: heavy $accent;
+    }
+
+    /* Dropdown popup: shorter and scrollable */
+    Select > .select-overlay {
+        max-height: 8;
+        overflow-y: auto;
+        border: round $accent;
+        background: $panel;
     }
 
     #hf-token-input {
@@ -57,13 +108,18 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
     }
 
     #buttons-row {
-        padding-top: 1;
+        padding-top: 2;
         height: auto;
         content-align: center middle;
     }
 
     .settings-button {
         margin: 0 1;
+        min-width: 10;
+    }
+
+    #ls-colors-dark-checkbox {
+        margin-top: 1;
     }
     """
 
@@ -79,7 +135,14 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
         selfhost_api_key = ai_cfg.get("selfhost_api_key") or ""
         selfhost_model = ai_cfg.get("selfhost_model") or ""
 
-        with Vertical(id="settings-dialog"):
+        # New LS_COLORS defaults – pick whatever you like as defaults
+        ls_colors_mode = getattr(cfg, "ls_colors_mode", None) or "env_with_boost"
+        ls_colors_scheme = getattr(cfg, "ls_colors_scheme", None) or "classic"
+        ls_dark_background = getattr(cfg, "ls_dark_background", None)
+        if ls_dark_background is None:
+            ls_dark_background = True
+
+        with VerticalScroll(id="settings-dialog"):
             yield Static("Settings", id="settings-title")
             yield Static(
                 "Configure ShellPilot options. Hugging Face and AI provider keys are "
@@ -89,10 +152,9 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
             )
 
             # --- Hugging Face ----------------------------------------------------
+            yield Static("Hugging Face", classes="settings-section-title")
             yield Static(
-                "Hugging Face access token (for gated GGUF downloads):",
-                id="hf-token-label",
-            )
+                "Hugging Face access token (for gated GGUF downloads):", id="hf-token-label", classes="settings-label")
             yield Input(
                 value=hf_token,
                 password=True,
@@ -101,7 +163,8 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
             )
 
             # --- OpenAI / GPT ----------------------------------------------------
-            yield Static("OpenAI API key (GPT):", id="openai-label")
+            yield Static("OpenAI / GPT", classes="settings-section-title")
+            yield Static("OpenAI API key (GPT):", id="openai-label", classes="settings-label")
             yield Input(
                 value=openai_key,
                 password=True,
@@ -110,7 +173,8 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
             )
 
             # --- Google Gemini ---------------------------------------------------
-            yield Static("Google Gemini API key:", id="gemini-label")
+            yield Static("Google Gemini", classes="settings-section-title")
+            yield Static("Google Gemini API key:", id="gemini-label", classes="settings-label")
             yield Input(
                 value=gemini_key,
                 password=True,
@@ -119,7 +183,8 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
             )
 
             # --- GitHub Copilot --------------------------------------------------
-            yield Static("GitHub Copilot API token (if using a custom gateway):", id="copilot-label")
+            yield Static("GitHub Copilot", classes="settings-section-title")
+            yield Static("GitHub Copilot API token (if using a custom gateway):", id="copilot-label", classes="settings-label")
             yield Input(
                 value=copilot_key,
                 password=True,
@@ -157,10 +222,46 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
                 id="selfhost-key-input",
             )
 
+            # --- LS_COLORS / file-color scheme ------------------------------------
+            yield Static(
+                "File color scheme (LS_COLORS):",
+                id="ls-colors-title",
+            )
+
+            # Mode selector
+            yield Static("Mode:", id="ls-colors-mode-label")
+            yield Select(
+                options=[
+                    ("Use terminal LS_COLORS", "env"),
+                    ("Use terminal LS_COLORS (brighten for dark background)", "env_with_boost"),
+                    ("Use built-in scheme", "scheme"),
+                ],
+                value=ls_colors_mode,
+                id="ls-colors-mode-select",
+            )
+
+            # Scheme selector (only used when mode == 'scheme', but we keep it visible for simplicity)
+            yield Static("Built-in scheme:", id="ls-colors-scheme-label")
+            yield Select(
+                options=[
+                    ("Classic", "classic"),
+                    ("High contrast (dark screens)", "high_contrast"),
+                    ("Pastel", "pastel"),
+                ],
+                value=ls_colors_scheme,
+                id="ls-colors-scheme-select",
+            )
+
+            # Dark background hint
+            yield Checkbox(
+                "Assume dark background (brighten dark colors)",
+                value=ls_dark_background,
+                id="ls-colors-dark-checkbox",
+            )
+
             with Horizontal(id="buttons-row"):
                 yield Button("Save", id="btn-save", variant="primary", classes="settings-button")
                 yield Button("Cancel", id="btn-cancel", variant="default", classes="settings-button")
-
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
@@ -176,6 +277,11 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
             selfhost_model_input = self.query_one("#selfhost-model-input", Input)
             selfhost_key_input = self.query_one("#selfhost-key-input", Input)
 
+            # New LS_COLORS widgets
+            mode_select = self.query_one("#ls-colors-mode-select", Select)
+            scheme_select = self.query_one("#ls-colors-scheme-select", Select)
+            dark_checkbox = self.query_one("#ls-colors-dark-checkbox", Checkbox)
+
             self.dismiss(
                 {
                     "hf_token": hf_input.value.strip() or None,
@@ -185,9 +291,13 @@ class SettingsScreen(ModalScreen[dict[str, Any] | None]):
                     "selfhost_base_url": selfhost_url_input.value.strip() or None,
                     "selfhost_model": selfhost_model_input.value.strip() or None,
                     "selfhost_api_key": selfhost_key_input.value.strip() or None,
+
+                    # LS_COLORS fields
+                    "ls_colors_mode": (mode_select.value or "env_with_boost"),
+                    "ls_colors_scheme": (scheme_select.value or "classic"),
+                    "ls_dark_background": bool(dark_checkbox.value),
                 }
             )
-
 
     def key_escape(self) -> None:
         self.dismiss(None)
