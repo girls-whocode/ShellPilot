@@ -1,0 +1,60 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shellpilot"
+version = "0.3.0"
+description = "A Textual-powered TUI file manager and shell assistant for Linux power users."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Jessica", email = "you@example.com" }
+]
+keywords = ["tui", "terminal", "file-manager", "textual", "shell", "linux"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Environment :: Console",
+  "Environment :: Console :: Curses",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: System :: Shells",
+  "Topic :: System :: Filesystems",
+  "Topic :: Utilities",
+]
+
+dependencies = [
+  # Sync with requirements.txt
+  "textual>=0.70.0",
+  "rich>=13.0.0",
+  "Pillow>=9.0.0; extra == 'images'",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff",
+]
+images = [
+  "Pillow>=9.0.0",
+]
+
+[project.scripts]
+shellpilot = "shellpilot.__main__:main"
+
+[tool.setuptools]
+packages = ["shellpilot"]
+
+[tool.setuptools.package-data]
+"shellpilot" = ["**/*.tcss", "**/*.txt"]
+
+# Optional: pytest configuration
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra"
+testpaths = ["tests"]

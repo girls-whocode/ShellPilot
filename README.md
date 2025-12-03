@@ -1,191 +1,259 @@
 # 📦 **ShellPilot**
+[![CI](https://github.com/girls-whocode/ShellPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/girls-whocode/ShellPilot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
+![Status](https://img.shields.io/badge/status-alpha-orange.svg)
+
+<p align="right">
+  <img src="assets/logo-shellpilot.svg" alt="ShellPilot Logo" width="420" />
+</p>
 
 *A modern, Textual-powered TUI file manager & shell assistant for Linux power users.*
 
 ShellPilot is a next-generation terminal UI designed for system administrators, developers, and anyone who lives in the shell. Inspired by **Midnight Commander**, **OS/2 Warp**, and modern developer tooling, ShellPilot blends a fast filesystem browser with smart file previews, a built-in action menu, recursive search, session memory, and optional AI-assisted commands.
 
-ShellPilot is engineered to feel *native*, *fast*, and *comfortably Linux-nerdy*.
-It’s your terminal cockpit. 🚀🐧
+It’s engineered to feel *native*, *fast*, and unashamedly Linux-nerdy.
+Your terminal cockpit. 🚀🐧
 
-**NOTE**: This is really ALPHA level development still... I have tested it on 1 laptop, with 2 different OS (Fedora 43 and POP!_OS). I am currently using POP!_OS because of the NVIDIA support. I am building out the self hosted, and local AI modules now. If there are errors, or problems, please open an issue. I will get to them as quickly as possible.
+> **Note:** ShellPilot is in *ALPHA*. Tested on POP!_OS and Fedora 43.
+> If you find bugs (you will), please open an issue!
 
 ---
+
+# 🧬 **What Is ShellPilot (In One Sentence)?**
+
+**ShellPilot is a Textual-based terminal file manager and intelligent shell assistant built for speed, safety, and AI-augmented workflows — all inside your terminal.**
+
+---
+
+## 🖼️ Screenshots
+
+<p align="center">
+  <img src="docs/img/shellpilot-main.png" alt="ShellPilot main file browser view" width="800" />
+</p>
+
+<p align="center">
+  <img src="docs/img/shellpilot-preview.png" alt="ShellPilot smart file preview" width="800" />
+</p>
+
+<p align="center">
+  <img src="docs/img/shellpilot-ai.png" alt="ShellPilot AI explanation mode" width="800" />
+</p>
 
 # ✨ **Features**
 
 ### 🗂️ File Browser
 
-* Navigate directories with arrow keys
-* Instant directory switching
+* Fast directory navigation
+* Instant switching
+* Persistent bookmarks
 * Automatic session restore
-* Bookmarks (persistent)
-* Keyboard shortcuts for common actions
-* AI integration (By default disabled)
+* Optional AI insights
 
 ### 🧠 Smart File Preview
 
-Automatically detects file type and displays the best preview mode:
+ShellPilot automatically detects the best way to render files:
 
-* **Images** → Rich or Pillow-based inline preview
-* **Code** → Syntax highlighting with line numbers
-* **Plain text** → Clean text viewer
-* **Binary files** → Hex dump preview
-* **Compressed files** → Automatic decompression preview support for:
+* **Images** → inline preview (Pillow)
+* **Source code** → syntax-highlighted view
+* **Text files** → clean pager
+* **Binary files** → hex dump
+* **Compressed files:**
 
-  * `.gz`
-  * `.bz2`
-  * `.xz`
+  * `.gz`, `.bz2`, `.xz`
   * `.zip` (coming soon)
 
 ### 🔍 Powerful Search
 
-* Fuzzy filename search
+* Fuzzy search
 * Real-time filtering
-* **Recursive search** option (configurable)
-* Supports wildcards (`*`, `?`) and regex toggle (future)
+* **Recursive search** (configurable)
+* Supports `*`, `?`, and future regex mode
 
 ### 🛠️ Action Menu
 
-Right-side context menu includes:
-
-* View file
-* Edit file (external editor launch)
-* Copy / Move / Delete
+* View
+* Edit (external editor)
+* Copy
+* Move
+* Delete (safe)
 * Rename
 * View metadata
-* Safe Trash (with restore)
-* More coming soon…
+* More tools coming…
 
-### 🗑️ Safe Trash System
+### 🗑️ Safe Trash Mode
 
-Deletion never touches your filesystem directly.
-Files are moved to a private **ShellPilot trash directory** with:
+Files aren't deleted. They're moved to:
 
-* Timestamps
+```
+~/.config/shellpilot/trash/
+```
+
+Includes:
+
 * Metadata
-* One-click restore
-* Empty trash option
+* Timestamp
+* Restore option
+* Empty trash
 
-### 🔧 Shell Command Integration
-
-ShellPilot integrates with system utilities:
+### 🔧 Shell Integration
 
 * `ls` generator
-* `file` (future)
-* `stat`
-* Permissions viewer
-* Owner/group resolution
+* `stat` viewer
+* Owner/group lookup
+* Permissions breakdown
 
-Coming soon:
+Upcoming:
 
-* Built-in mini terminal
+* Embedded mini-terminal
 * Command palette
 * AI command suggestions
 
-### 🎨 Image & Rich Media Support
+### 🎨 Media Support
 
-If **Pillow** is installed, images are rendered beautifully inline.
-Otherwise, ShellPilot falls back to simple info mode.
+* Fancy image rendering when Pillow is installed
+* Falls back gracefully when not
 
-### 🗄️ Session Memory
+### 🗄️ Persistent Session Memory
 
 ShellPilot remembers:
 
-* Last visited directory
+* Last directory
 * Bookmarks
-* Filter settings
-* Future: layout + panel state
+* Search filters
+* Layout (future)
+* Theme (upcoming)
 
 ### 🪶 Lightweight & Fast
 
-No Electron bloat.
-No GUI overhead.
-Just **Textual + Rich** doing what they do best.
+Just **Textual + Rich**.
+No Electron. No bloat. No nonsense.
 
 ---
 
-# 📁 **Project Structure**
+# ⚙️ **Configuration Files**
 
-Example layout (yours will evolve):
+ShellPilot stores user data in:
 
 ```
-ShellPilot/
-├── shellpilot/
-│   ├── ai/
-│   │   ├── config.py
-│   │   ├── engine.py
-│   │   ├── models.py
-│   │   └── remote.py
-│   ├── core/
-│   │   ├── commands.py
-│   │   ├── fs_browser.py
-│   │   ├── git.py
-│   │   └── search.py
-│   ├── ui/
-│   │   ├── action_menu.py
-│   │   ├── app.py
-│   │   ├── app.tcss
-│   │   ├── search_bar.py
-│   │   ├── settings.py
-│   │   └── widgets.py
-│   ├── utils/
-│   │   ├── log_highlighter.py
-│   │   ├── ls_colors.py
-│   │   ├── preview.py
-│   │   └── shell.py
-├── models/
-│   └── (empty by default - use action menu to download models)
-├── README.md
-├── requirements.txt
-├── .gitignore
-├── models.json
-└── main.py
+~/.config/shellpilot/
 ```
+
+Contents:
+
+| File             | Purpose                                                |
+| ---------------- | ------------------------------------------------------ |
+| `config.json`    | General settings (recursive search, AI settings, etc.) |
+| `bookmarks.json` | Persistent bookmarks                                   |
+| `state.json`     | Session restoration                                    |
+| `models.json`    | AI model definitions                                   |
+| `settings/`      | Future expansion                                       |
+
+All human-friendly JSON. No surprises.
+
+---
+
+# 🤖 **AI Support (Optional)**
+
+ShellPilot has three AI operation modes:
+
+### 1. Local GGUF Models
+
+Runs with `llama-cpp-python`.
+
+Recommended:
+
+* Phi-3.1 / Phi-3.5
+* Llama 3.1 Distill
+* Q4 models
+* 4+ CPU cores
+* 3–8GB RAM depending on model
+
+### 2. Remote AI (OpenAI-Compatible)
+
+Works with:
+
+* vLLM
+* DeepSeek
+* OpenAI
+* Anything with `/v1/chat/completions`
+
+### 3. Disabled (Default)
+
+Pure file manager mode.
+
+---
+
+# 🎯 **Design Philosophy**
+
+ShellPilot is built around:
+
+* **Speed** → immediate feedback
+* **Predictability** → no destructive operations
+* **Extensibility** → easy to add handlers or actions
+* **Minimalism** → stays out of your way
+* **Observability** → clear status messages, AI activity logs, and safe operations
+
+---
+
+# 🧩 **Future Extension Hooks**
+
+Upcoming plugin-style extension points:
+
+* Custom preview handlers
+* Custom ActionMenu actions
+* Custom AI analysis engines
+* Search strategy modules
+* Panel layout extensions
+
+---
+
+# 👩‍💻 **Developer Quickstart**
+
+```bash
+git clone https://github.com/girls-whocode/ShellPilot
+cd ShellPilot
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --dev
+```
+
+Important entry points:
+
+| Component      | File                           |
+| -------------- | ------------------------------ |
+| UI / Main App  | `shellpilot/ui/app.py`         |
+| AI Engine      | `shellpilot/ai/engine.py`      |
+| Preview System | `shellpilot/utils/preview.py`  |
+| Search Logic   | `shellpilot/core/search.py`    |
+| Action Menu    | `shellpilot/ui/action_menu.py` |
 
 ---
 
 # 🚀 **Getting Started**
 
-### Prerequisites
+### Requirements
 
-* Python **3.10** or later
-* Linux (recommended)
-* Optional:
+* Python 3.10+
+* Linux terminal
+* Optional: Pillow, Ripgrep
 
-  * **Pillow** → image previews
-  * **Ripgrep** → future fast recursive search
-
-### Installation
-
-Clone the repo:
+### Install
 
 ```bash
 git clone https://github.com/girls-whocode/ShellPilot.git
 cd ShellPilot
-```
-
-(If you have a virtual environment)
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
----
+### Run
 
-# ▶️ **Run ShellPilot**
-
-```
+```bash
 python main.py
 ```
 
-or if you want to install it as a system command later:
+Install as a system command:
 
 ```bash
 pip install .
@@ -194,27 +262,24 @@ shellpilot
 
 ---
 
-# ⌨️ Keybindings
+# ⌨️ **Keybindings**
 
-| Key   | Action                                 |
-| ----- | -------------------------------------- |
-| ↑ / ↓ | Navigate entries                       |
-| →     | Enter directory / open action menu     |
-| ←     | Go up one directory                    |
-| `?`   | Toggle Help Menu                       |
-| `:`   | Action Command Menu                    |
-| `/`   | Search / Filter (advanced & recursive) |
-| `h`   | Jump to Home Directory                 |
-| `t`   | Trash (recovery)                       |
-| `del` | Delete file or folder to Trash         |
-| `^b`  | Bookmark folder                        |
-| `^j`  | Next Bookmark folder                   |
-| `^,`  | Open Settings Menu                     |
-| `a`   | Open AI explain                        |
-| `e`   | Bookmark folder                        |
-| `q`   | Quit                                   |
-
-More are being added continuously.
+| Key   | Action                        |
+| ----- | ----------------------------- |
+| ↑ / ↓ | Navigate                      |
+| →     | Action menu / enter directory |
+| ←     | Up one directory              |
+| /     | Search                        |
+| :     | Action command palette        |
+| a     | AI explain                    |
+| h     | Home                          |
+| del   | Safe delete                   |
+| t     | Trash manager                 |
+| ^b    | Bookmark                      |
+| ^j    | Next bookmark                 |
+| ^,    | Settings                      |
+| ?     | Help                          |
+| q     | Quit                          |
 
 ---
 
@@ -222,41 +287,47 @@ More are being added continuously.
 
 ### 0.3.x — Core Enhancements
 
-* Editor integration (nano/vim/micro detection)
-* Multi-pane layout
-* Clipboard support
-* Improved hex viewer
-* File diffing
+* Editor integration
+* Multi-pane
+* Clipboard
+* Hex viewer upgrade
+* File diff
 
 ### 0.4.x — Power Tools
 
-* Embedded mini-terminal
 * Command palette
-* Plugin architecture
-* Keyboard macro support
+* Plugin framework
+* Macro engine
+* Built-in terminal
 
 ### 0.5.x — AI Mode
 
-* Optional LLM-powered:
+* File analysis
+* Command explanations
+* Troubleshooting guidance
+* “What does this file do?” mode
 
-  * Command explanations
-  * Command generation
-  * Help mode (“what does this file do?”)
-  * System troubleshooting
+### 1.0 — Flight Deck Release
 
-### 1.0 — "Full Flight Deck" Release
-
-* Multi-panel layout (classic MC style)
-* Split horizontal/vertical panels
-* Drag-and-drop inside TUI
-* Config-driven theming
-* Installer package (.rpm / .deb)
+* Multi-panel UI
+* Themes
+* Installers (`.rpm`, `.deb`)
+* Draggable elements
+* Full customization
 
 ---
 
-# 🧪 Testing
+# 🚧 **Known Issues (Alpha)**
 
-Run all tests:
+* Some terminals have small rendering quirks
+* Pillow required for image preview
+* Large models require more RAM
+* Multi-pane mode still in development
+* Settings UI is evolving
+
+---
+
+# 🧪 **Testing**
 
 ```bash
 pytest
@@ -264,27 +335,35 @@ pytest
 
 ---
 
-# 🐛 Issues & Contributions
+# 🐛 **Issues & Contributions**
 
-Feedback and contributions are welcome!
+Contributions are *very* welcome!
+
+Good areas to contribute:
+
+* Preview handlers
+* Search improvements
+* Performance enhancements
+* Abstracted keyboard actions
+* AI tooling
+* UI improvements
+* Docs & examples
 
 Please open an issue for:
 
 * Bugs
-* Feature requests
 * Ideas
-* UI adjustments
-* TUI performance problems
-
-Pull requests are very welcome — especially for:
-
-* New file preview handlers
-* Action menu improvements
-* Recursive search enhancements
-* Code cleanup / refactors
+* UX suggestions
+* Performance problems
 
 ---
 
-# 📝 License
+# 💖 **Support**
 
-MIT License — free to use, modify, and build upon.
+A sponsor link can go here later — open source takes time and caffeine.
+
+---
+
+# 📝 **License**
+
+MIT License — build cool things and share freely.
