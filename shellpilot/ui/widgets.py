@@ -25,11 +25,9 @@ from shellpilot.utils.preview import (
     is_image_file,
 )
 
-
 def format_mode(mode: int) -> str:
     """Return a string like '-rw-r--r--'."""
     return statmod.filemode(mode)
-
 
 def icon_for_entry(path: Path) -> str:
     """Return a simple icon based on file type."""
@@ -48,7 +46,6 @@ def icon_for_entry(path: Path) -> str:
     if suffix in {".json", ".yml", ".yaml", ".toml"}:
         return "🧾"
     return "📃"
-
 
 class FileList(ListView):
     """ListView specialized for displaying filesystem entries."""
@@ -93,6 +90,11 @@ class FileList(ListView):
 
     def refresh_entries(self) -> None:
         """Populate the list with entries from current_path, honoring filter."""
+        # Don't try to mount children before the FileList is attached
+
+        if not self.is_attached:
+            return
+
         self.clear()
         current = self.current_path
 
@@ -100,6 +102,7 @@ class FileList(ListView):
         recursive = getattr(q, "recursive", False)
 
         parent: Path | None = None
+
         try:
             if current.parent != current:
                 parent = current.parent
@@ -118,6 +121,7 @@ class FileList(ListView):
                     group = grp.getgrgid(st.st_gid).gr_name
                 except KeyError:
                     group = str(st.st_gid)
+
             except Exception:
                 mode_str = "d?????????"
                 owner = "?"
@@ -382,7 +386,6 @@ class CommandPreview(Static):
             "Press [b]Enter[/b] to run this command."
         )
         self.update(text)
-
 
 class OutputPanel(Static):
     """Displays real command execution results OR syntax-highlighted code."""

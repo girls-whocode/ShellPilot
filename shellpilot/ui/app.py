@@ -45,6 +45,7 @@ from shellpilot.ai.models import get_model_registry, get_model_path
 from shellpilot.ui.settings import SettingsScreen
 from shellpilot.config import load_config, save_config, AppConfig
 from shellpilot.core.git import is_git_repo, get_git_status
+from shellpilot.ai.hardware import detect_nvidia_gpu
 from shellpilot.ui.widgets import FileList, CommandPreview, OutputPanel
 from shellpilot.utils.preview import (
     is_log_file,
@@ -113,6 +114,8 @@ class ShellPilotApp(App):
         Binding("a", "ai_explain_file", "AI Explain", show=True),
         Binding(":", "open_action_menu", "Command"),
         Binding("ctrl+p", "open_action_menu", "Command"),
+        ("pageup", "page_up", "Page up"),
+        ("pagedown", "page_down", "Page down"),
     ]
 
     def __init__(self, start_path: Optional[Path] = None, **kwargs):
@@ -126,6 +129,23 @@ class ShellPilotApp(App):
         # Initialize trash before App startup
         self.trash_dir, self.trash_index_path = self._init_trash_dir()
         self.trash_index: dict[str, dict] = self._load_trash_index()
+
+        # AI hardware status (set once a local engine is used)
+        # Tuple: ("cpu" | "gpu", optional_gpu_name)
+        self._ai_hardware: Optional[tuple[str, Optional[str]]] = None
+
+        # Initialize AI hardware indicator from system GPU detection
+        try:
+            gpu_info = detect_nvidia_gpu()
+        except Exception:
+            gpu_info = None
+
+        if gpu_info is not None:
+            # We have an NVIDIA GPU available in the system
+            self._ai_hardware = ("gpu", gpu_info.name)
+        else:
+            # No GPU visible → assume CPU-only
+            self._ai_hardware = ("cpu", None)
 
         super().__init__(**kwargs)
         
@@ -234,18 +254,54 @@ class ShellPilotApp(App):
             f"-{gs.get('deleted', 0)} "
             f"?{gs.get('untracked', 0)}"
         )
+    
+    def _set_ai_hardware_from_engine(self, engine: Any) -> None:
+        """Update cached AI hardware mode (CPU/GPU) from the AI engine."""
+        try:
+            mode = "gpu" if getattr(engine, "use_gpu", False) else "cpu"
+            gpu_info = getattr(engine, "gpu_info", None)
+            name = getattr(gpu_info, "name", None) if gpu_info is not None else None
+            self._ai_hardware = (mode, name)
+        except Exception:
+            # Don't let status-bar cosmetics break anything
+            self._ai_hardware = None
+
+        # Re-render status bar with new hardware info
+        self._update_status_with_git()
+
+    def _format_ai_hardware_status(self) -> str:
+        """Return a tiny 'CPU vs GPU' segment for the status bar."""
+        hw = getattr(self, "_ai_hardware", None)
+        if not hw:
+            return ""
+
+        mode, _name = hw
+
+        if mode == "gpu":
+            # Small, readable, works in most fonts
+            return "🧠 GPU"
+        elif mode == "cpu":
+            return "🧠 CPU"
+
+        return ""
 
     def _update_status_with_git(self) -> None:
-        """Render the current base status plus Git info into the status widget."""
+        """Render the current base status plus AI hardware + Git info."""
         if not self.status:
             return
 
         git_part = self._format_git_status_summary()
-        if git_part:
-            full = f"{self._base_status}    |    {git_part}"
-        else:
-            full = self._base_status
+        ai_part = self._format_ai_hardware_status()
 
+        parts: list[str] = []
+        if self._base_status:
+            parts.append(self._base_status)
+        if ai_part:
+            parts.append(ai_part)
+        if git_part:
+            parts.append(git_part)
+
+        full = "    |    ".join(parts)
         self.status.update(full)
 
     # ---------- Trash helpers ----------
@@ -468,6 +524,13 @@ class ShellPilotApp(App):
             if selfhost_model is not None:
                 ai_cfg["selfhost_model"] = selfhost_model
         else:
+            # --- 2b) Optionally auto-select a provider ----------------------------
+            # If user just set an OpenAI key and no explicit provider, default to GPT.
+            if openai_api_key is not None:
+                # Don't override an explicit selfhost / gemini / copilot choice.
+                current_provider = ai_cfg.get("provider")
+                if current_provider in (None, "", "local"):
+                    ai_cfg["provider"] = "gpt"
             # No new URL → allow updating key / model only if they were provided
             if selfhost_api_key is not None:
                 ai_cfg["selfhost_api_key"] = selfhost_api_key
@@ -1240,6 +1303,35 @@ class ShellPilotApp(App):
                    if restore_path != orig_path else "")
             )
 
+    # ---------- Page up / page down in the file list ----------
+
+    def _move_cursor_page(self, direction: int, page_size: int = 10) -> None:
+        """
+        Move the file-list selection by a 'page' of items.
+
+        direction: -1 for up, +1 for down
+        page_size: how many rows to step (tweak as you like)
+        """
+        if not self.file_list:
+            return
+
+        # FileList inherits from ListView, which exposes these actions.
+        if direction < 0:
+            mover = self.file_list.action_cursor_up
+        else:
+            mover = self.file_list.action_cursor_down
+
+        for _ in range(page_size):
+            mover()
+
+    def action_page_up(self) -> None:
+        """Move the selection bar up by one page."""
+        self._move_cursor_page(direction=-1)
+
+    def action_page_down(self) -> None:
+        """Move the selection bar down by one page."""
+        self._move_cursor_page(direction=1)
+
     # ---------- AI helpers ----------
     def action_switch_ai_model(self) -> None:
         """
@@ -1455,21 +1547,41 @@ class ShellPilotApp(App):
         # Only query local engine thread count when actually using local
         thread_status: str
         if provider == "local":
+            engine = None
+            threads: Optional[int] = None
+            gpu_mode = False
+
             try:
-                threads = get_engine().n_threads
+                engine = get_engine()
+                threads = getattr(engine, "n_threads", None)
             except Exception:
+                engine = None
                 threads = None
 
+            if engine is not None:
+                # Update CPU/GPU mode indicator from the actual engine settings
+                self._set_ai_hardware_from_engine(engine)
+                gpu_mode = bool(getattr(engine, "use_gpu", False))
+
+            # Decide what to show in the AI status line
             if threads is None:
-                thread_status = "⚙️  Local model (thread count unknown)"
-            elif threads >= 12:
-                thread_status = f"🔥 Using {threads} CPU threads (high performance, local)"
-            elif threads >= 8:
-                thread_status = f"🚀 Using {threads} CPU threads (local)"
-            elif threads >= 4:
-                thread_status = f"⚙️  Using {threads} CPU threads (local)"
+                if gpu_mode:
+                    thread_status = "🧠 Local model on GPU (thread count unknown)"
+                else:
+                    thread_status = "⚙️ Local model (thread count unknown)"
             else:
-                thread_status = f"🐢 Using {threads} CPU thread (local, limited mode)"
+                if gpu_mode:
+                    thread_status = (
+                        f"🧠 Local model on GPU (offload) + {threads} CPU threads for sampling"
+                    )
+                elif threads >= 12:
+                    thread_status = f"🔥 Using {threads} CPU threads (high performance, local)"
+                elif threads >= 8:
+                    thread_status = f"🚀 Using {threads} CPU threads (local)"
+                elif threads >= 4:
+                    thread_status = f"⚙️  Using {threads} CPU threads (local)"
+                else:
+                    thread_status = f"🐢 Using {threads} CPU thread (local, limited mode)"
         else:
             provider_name = {
                 "gpt": "OpenAI GPT",
@@ -2110,12 +2222,30 @@ class ShellPilotApp(App):
 
     def _handle_aimodel_provider_switch(self, provider: str) -> None:
         provider = provider.lower()
+
+        # --- Switch back to local llama engine ---
+        if provider == "local":
+            cfg = load_ai_config()
+            cfg["provider"] = "local"
+            save_ai_config(cfg)
+
+            self._set_status("AI provider switched to local model.")
+            if self.output:
+                self.output.update(
+                    "[b]AI provider switched.[/b]\n\n"
+                    "Provider : [b]local[/b]\n"
+                    "Backend  : local llama.cpp engine\n\n"
+                    "[dim]Use ': aimodel &lt;id-or-index&gt;' to choose a specific GGUF model.[/dim]"
+                )
+            return
+
+        # --- Remote providers: require stored keys ---
         if provider not in {"gpt", "gemini", "copilot"}:
             self._set_status(f"AI: unknown provider '{provider}'")
             if self.output:
                 self.output.update(
                     f"[b]AI:[/b] Unknown provider [code]{provider}[/code]. "
-                    "Valid options: gpt, gemini, copilot."
+                    "Valid options: local, gpt, gemini, copilot, selfhost."
                 )
             return
 
@@ -2140,6 +2270,15 @@ class ShellPilotApp(App):
 
         cfg["provider"] = provider
         save_ai_config(cfg)
+
+        self._set_status(f"AI provider switched to {provider}.")
+        if self.output:
+            self.output.update(
+                "[b]AI provider switched.[/b]\n\n"
+                f"Provider : [b]{provider}[/b]\n"
+                f"API key  : [dim]{self._mask_api_key(key)}[/dim]\n"
+            )
+
 
         self._set_status(f"AI: switched to {provider} (remote).")
         if self.output:
@@ -2292,6 +2431,11 @@ class ShellPilotApp(App):
                 self._handle_aimodel_provider(provider, api_key)
                 return
 
+            elif action == "aimodel_provider_switch":
+                provider = (result.get("provider") or "").strip()
+                self._handle_aimodel_provider_switch(provider)
+                return
+
             elif action == "aimodel_selfhost":
                 url = (result.get("url") or "").strip()
                 api_key = (result.get("api_key") or "").strip()
@@ -2305,6 +2449,7 @@ class ShellPilotApp(App):
             elif action == "settings":
                 self.action_open_settings()
                 return
+
 
             else:
                 self._set_status(f"Unknown command: {action}")

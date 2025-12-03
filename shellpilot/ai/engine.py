@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 from llama_cpp import Llama
 
+from shellpilot.ai.hardware import detect_nvidia_gpu
 from shellpilot.ai.models import get_model_registry, get_model_path
 from shellpilot.config import load_config
 
@@ -48,21 +49,66 @@ class AIEngine:
         self.model_spec = registry[model_id]
         self.model_path: Path = get_model_path(model_id)
 
-        # CPU-only setup for now.
+        # CPU thread setup (still defaults to "use all cores")
         n_threads = max(1, (os.cpu_count() or 4))
         self.n_threads = n_threads
 
-        # Do NOT require the file yet — it may need to be downloaded.
-        # We'll lazily create the Llama instance when we first run inference.
+        # Detect NVIDIA GPU once and remember it
+        self.gpu_info = detect_nvidia_gpu()
+        self.use_gpu = bool(self.gpu_info)
+
+        if self.gpu_info:
+            # You can swap this to your logging system later
+            print(
+                f"[ShellPilot][AI] Detected NVIDIA GPU: "
+                f"{self.gpu_info.name} ({self.gpu_info.memory_mb} MB VRAM)"
+            )
+        else:
+            print("[ShellPilot][AI] No NVIDIA GPU detected, using CPU mode")
+
+        # Lazily created llama-cpp instance
         self._llm: Optional[Llama] = None
 
     def _create_llm(self) -> Llama:
+        """
+        Construct the underlying llama-cpp model.
+
+        - If an NVIDIA GPU is detected and the llama-cpp wheel was built with CUDA,
+          we try to offload all layers to GPU (n_gpu_layers = -1).
+        - If that fails for any reason (no CUDA build, driver mismatch, etc.),
+          we log and fall back to CPU-only (n_gpu_layers = 0).
+        """
+        base_kwargs = {
+            "model_path": str(self.model_path),
+            "n_ctx": 8192,
+            "n_threads": self.n_threads,
+            "n_batch": 512,
+        }
+
+        # First: try GPU if available
+        if getattr(self, "use_gpu", False):
+            try:
+                print("[ShellPilot][AI] Initializing llama-cpp with GPU offload...")
+                return Llama(
+                    **base_kwargs,
+                    n_gpu_layers=-1,  # offload as many layers as possible
+                )
+            except Exception as e:
+                # If GPU init fails, fall back to CPU and don't try again
+                print(
+                    "[ShellPilot][AI] GPU initialization failed, "
+                    f"falling back to CPU-only mode. Error: {e!r}"
+                )
+                self.use_gpu = False
+
+        # CPU-only path (what you had before)
+        print(
+            f"[ShellPilot][AI] Initializing llama-cpp in CPU mode "
+            f"({self.n_threads} threads)"
+        )
         return Llama(
-            model_path=str(self.model_path),
-            n_ctx=8192,
-            n_threads=self.n_threads,
+            **base_kwargs,
             n_gpu_layers=0,
-            n_batch=512,
         )
 
     def _run(
