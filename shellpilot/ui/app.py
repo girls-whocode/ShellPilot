@@ -315,6 +315,9 @@ class ShellPilotApp(App):
         This reflects both:
         - which *provider* is currently configured (local / gpt / gemini / selfhost / copilot)
         - and, for the local provider, whether we're actually on CPU or GPU.
+
+        This is presented as SENTRA's current 'mode', since SENTRA is the
+        unified AI persona inside ShellPilot.
         """
         # Figure out which provider is active
         try:
@@ -332,19 +335,19 @@ class ShellPilotApp(App):
         # Local model → show CPU / GPU explicitly
         if provider == "local":
             if mode == "gpu":
-                return "🧠 Local (GPU)"
+                return "🧠 SENTRA · Local (GPU)"
             if mode == "cpu":
-                return "🧠 Local (CPU)"
+                return "🧠 SENTRA · Local (CPU)"
             # Fallback if we don't know, but provider is local
-            return "🧠 Local"
+            return "🧠 SENTRA · Local"
 
-        # Remote backends → prioritise provider label, not local GPU
+        # Remote backends → prioritize provider label, not local GPU
         if provider == "gpt":
-            return "🌐 GPT"
+            return "🌐 SENTRA · GPT"
         if provider == "gemini":
-            return "🌐 Gemini"
+            return "🌐 SENTRA · Gemini"
         if provider == "copilot":
-            return "🌐 Copilot"
+            return "🌐 SENTRA · Copilot"
         if provider == "selfhost":
             # Optional: include a hint of the base URL host, if configured
             try:
@@ -358,10 +361,10 @@ class ShellPilotApp(App):
                     host = urlparse(base_url).hostname or ""
                 except Exception:
                     host = ""
-            return f"🌐 Selfhost{f' ({host})' if host else ''}"
+            return f"🌐 SENTRA · Selfhost{f' ({host})' if host else ''}"
 
         # Unknown / future providers
-        return f"🌐 {provider}"
+        return f"🌐 SENTRA · {provider}"
 
     def _update_status_with_git(self) -> None:
         """Render the current status message plus AI provider + Git info in the footer."""
@@ -1381,8 +1384,8 @@ class ShellPilotApp(App):
             "  Ctrl+B         Bookmark current directory\n"
             "  Ctrl+J         Jump to next bookmark\n"
             "\n"
-            "[b]AI & Command Palette[/b]\n"
-            "  a              AI explain current file\n"
+            "[b]SENTRA & Command Palette[/b]\n"
+            "  a              Ask SENTRA about the selected file/dir\n"
             "  : / Ctrl+P     Command palette\n"
             "\n"
             "[b]App & UI[/b]\n"
@@ -1488,10 +1491,10 @@ class ShellPilotApp(App):
         """Use the local AI model to explain the currently selected file or directory."""
         entry_path = self._get_selected_path()
         if entry_path is None:
-            self._set_status("AI: no file or directory selected")
+            self._set_status("SENTRA: no file or directory selected")
             if self.output:
                 self.output.update(
-                    "[b]AI:[/b] No file or directory selected. "
+                    "[b]SENTRA:[/b] No file or directory selected. "
                     "Highlight something in the file list and press [b]a[/b] again."
                 )
             return
@@ -1738,7 +1741,7 @@ class ShellPilotApp(App):
             step2_label = "Analyze with configured AI provider"
 
         lines: list[str] = [
-            f"[b]AI explain ({kind}):[/b] {path}",
+            f"[b]SENTRA explain ({kind}):[/b] {path}",
             f"[dim]{thread_status}[/dim]",
             "",
             mark(1, "Read and summarize contents"),
@@ -1760,10 +1763,10 @@ class ShellPilotApp(App):
         body = "\n".join(lines)
 
         from rich.panel import Panel
-        panel = Panel.fit(body, title="AI: working…", border_style="cyan")
+        panel = Panel.fit(body, title="SENTRA is working…", border_style="cyan")
 
         self.output.update(panel)
-        self._set_status(f"AI: analyzing {kind} {path.name} (stage {stage}/3)")
+        self._set_status(f"SENTRA: analyzing {kind} {path.name} (stage {stage}/3)")
 
     def _handle_aimodel(self, target: str) -> None:
         """
@@ -2146,11 +2149,11 @@ class ShellPilotApp(App):
 
     def _show_ai_error(self, message: str) -> None:
         """Render an AI-related error in the output pane + status bar."""
-        self._set_status(f"AI: {message}")
+        self._set_status(f"SENTRA: {message}")
         if self.output:
             panel = Panel.fit(
-                f"[b]AI error:[/b]\n\n{message}",
-                title="AI",
+                f"[b]SENTRA error:[/b]\n\n{message}",
+                title="SENTRA",
                 border_style="red",
             )
             self.output.update(panel)
@@ -2162,7 +2165,7 @@ class ShellPilotApp(App):
         elapsed: float | None = None,
     ) -> None:
         """Render the AI explanation in the output pane and status bar."""
-        self._set_status(f"AI: analysis complete for {path.name}")
+        self._set_status(f"SENTRA: analysis complete for {path.name}")
 
         if self.output:
             # Build a composite renderable: dim timing line + blank + Markdown body
@@ -2178,7 +2181,7 @@ class ShellPilotApp(App):
 
             panel = Panel.fit(
                 content,
-                title=f"AI: {path.name}",
+                title=f"SENTRA · {path.name}",
                 border_style="cyan",
             )
             self.output.update(panel)
@@ -2186,9 +2189,9 @@ class ShellPilotApp(App):
         if getattr(self, "preview", None) is not None:
             self.preview.update(
                 Panel.fit(
-                    f"AI summary for [magenta]{path.name}[/magenta].\n\n"
+                    f"SENTRA's summary for [magenta]{path.name}[/magenta].\n\n"
                     "Press [b]a[/b] on another file or directory to analyze again.",
-                    title="AI helper",
+                    title="SENTRA helper",
                     border_style="cyan",
                 )
             )
@@ -2219,7 +2222,7 @@ class ShellPilotApp(App):
         local_model_id = cfg.get("local_model_id") or current_id
 
         lines: list[str] = []
-        lines.append("[b]AI configuration:[/b]")
+        lines.append("[b]SENTRA configuration:[/b]")
         lines.append(f"- Active provider: [b]{provider}[/b]")
 
         field_map = {

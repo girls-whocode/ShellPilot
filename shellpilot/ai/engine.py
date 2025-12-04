@@ -28,6 +28,19 @@ _DEFAULT_MODEL = (
     / "Phi-3.5-mini-instruct-Q4_K_M.gguf"
 )
 
+# SENTRA: ShellPilot's embedded AI system guardian
+SENTRA_SYSTEM_PROMPT = """You are SENTRA, the intelligent system guardian embedded inside ShellPilot, a Linux-focused terminal file manager and sysadmin companion on Linux systems.
+
+Your role:
+- Provide concise, practical, Linux-savvy answers.
+- Prefer using the local context and information you are given (files, directories, logs, system summaries) over generic explanations.
+- Be warm, confident, and lightly witty, but never rude or insulting.
+- When you suggest shell commands, assume Bash on a typical Linux system and briefly explain what the commands do.
+- Never describe or suggest destructive commands (for example: rm -rf /, overwriting critical system files outside the user's home, disabling security controls).
+- If you don't have enough information, say so explicitly and suggest how to gather it.
+
+You are talking to a technically capable user (often a senior Linux engineer), but you should still be clear and structured in your explanations.
+"""
 
 class AIEngine:
     """
@@ -235,9 +248,8 @@ class AIEngine:
             snippet += "\n\n[... truncated by ShellPilot for length ...]\n"
 
         prompt = (
-            "You are ShellPilot, a Linux-focused TUI assistant running locally "
-            "inside a terminal file manager. You are helping a senior Linux "
-            "engineer understand a file on a Linux system.\n\n"
+            SENTRA_SYSTEM_PROMPT
+            + "\nYou are currently helping the user understand a single file on a Linux system from inside ShellPilot.\n\n"
             "User environment:\n"
             "- OS: generic Linux (Fedora/Ubuntu/Alma/etc.)\n"
             "- ShellPilot is browsing the filesystem and showing file previews.\n"
@@ -247,14 +259,14 @@ class AIEngine:
             "1. Identify what kind of file this appears to be (log, config, script, JSON, YAML, systemd unit, etc.).\n"
             "2. Summarize what it does or contains in clear bullet points.\n"
             "3. If it looks like a config or script, call out any obvious issues, risks, or misconfigurations.\n"
-            "4. Suggest 2-3 next steps the user might take to debug or improve things.\n\n"
+            "4. Suggest 2–3 next steps the user might take to debug or improve things.\n\n"
             f"File path: {path}\n\n"
             "File content snippet (may be truncated):\n\n"
             f"{snippet}\n\n"
-            "Now, respond with:\n"
+            "Now respond with:\n"
             "- A short heading with the file type guess\n"
-            "- 3-7 bullet points summarizing\n"
-            "- A \"Next steps:\" section with 2-3 bullets.\n"
+            "- 3–7 bullet points summarizing\n"
+            "- A \"Next steps:\" section with 2–3 bullets.\n"
         )
 
         return self._run(prompt, max_tokens=1024, temperature=0.15)
@@ -309,13 +321,13 @@ class AIEngine:
             ctx_txt = f"\n\nContext:\n{ctx}\n"
 
         prompt = (
-            "You are ShellPilot, a Linux terminal assistant.\n"
-            "Answer the user's question as a concise, practical Linux-savvy helper.\n"
-            "If you give commands, assume a Bash shell on a typical Linux system.\n\n"
+            SENTRA_SYSTEM_PROMPT
+            + "\nYou are currently answering a general question from the user inside ShellPilot.\n\n"
             f"Question:\n{question}\n"
             f"{ctx_txt}\n"
             "Now answer in a clear, practical way. If you suggest commands, "
-            "explain briefly what they do.\n"
+            "explain briefly what they do. Keep your tone warm, confident, and "
+            "lightly witty, but stay focused on helping the user solve the problem.\n"
         )
 
         return self._run(prompt, max_tokens=2048, temperature=0.3)
