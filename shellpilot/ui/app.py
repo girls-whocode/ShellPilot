@@ -14,10 +14,11 @@ from typing import Any, Optional
 from datetime import datetime
 
 from rich.syntax import Syntax
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.text import Text
 from rich.panel import Panel
 from rich.markdown import Markdown
+from rich.text import Text
 
 try:
     from PIL import Image as PILImage
@@ -26,8 +27,9 @@ except ImportError:
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Static, Input, ListView, Footer
+from textual.widgets import Static, Input, ListView
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 
 from shellpilot.core.fs_browser import list_dir  # still used in action menu
 from shellpilot.core.commands import (
@@ -90,25 +92,48 @@ def _has_passwordless_sudo() -> bool:
     except Exception:
         return False
 
-class ShellPilotFooter(Footer):
+class ShellPilotFooter(Static):
     """Custom footer used as ShellPilot's status bar."""
+    auto_footer = False
+    show_command_palette = False
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.message: str = ""
+    def set_message(self, message: RenderableType) -> None:
+        """Update the footer contents."""
+        # message can be a str or a Rich Text / Panel / etc.
+        self.update(message or "")
 
-    def set_message(self, message: str) -> None:
-        self.message = message
-        self.refresh()
+class KeyHelpScreen(ModalScreen[None]):
+    """Modal popup showing all key bindings (replaces footer key bar)."""
 
-    def render(self):
-        # Ignore default keybinding rendering and just show our status text
-        return Text(self.message or "")
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+    ]
+
+    def __init__(self, help_text: str) -> None:
+        super().__init__()
+        self.help_text = help_text
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Vertical
+
+        yield Vertical(
+            Static("[b]ShellPilot key bindings[/b]", id="keyhelp-title"),
+            Static(
+                self.help_text,
+                id="keyhelp-body",
+            ),
+            Static("[dim]Press Esc to close[/dim]", id="keyhelp-hint"),
+            id="keyhelp-dialog",
+        )
+
+    def action_close(self) -> None:
+        self.dismiss(None)
 
 class ShellPilotApp(App):
     """Main Textual application for ShellPilot."""
 
     CSS_PATH = "app.tcss"
+    auto_footer = False
 
     BINDINGS = [
         ("q", "quit", "Quit"),
@@ -131,6 +156,7 @@ class ShellPilotApp(App):
         Binding("ctrl+p", "open_action_menu", "Command"),
         ("pageup", "page_up", "Page up"),
         ("pagedown", "page_down", "Page down"),
+        Binding("f1", "open_key_help", "Key help"),
     ]
 
     def __init__(self, start_path: Optional[Path] = None, **kwargs):
@@ -284,41 +310,96 @@ class ShellPilotApp(App):
         self._update_status_with_git()
 
     def _format_ai_hardware_status(self) -> str:
-        """Return a tiny 'CPU vs GPU' segment for the status bar."""
+        """Return a tiny AI status segment for the footer.
+
+        This reflects both:
+        - which *provider* is currently configured (local / gpt / gemini / selfhost / copilot)
+        - and, for the local provider, whether we're actually on CPU or GPU.
+        """
+        # Figure out which provider is active
+        try:
+            settings = get_effective_ai_settings()
+            provider = settings.get("provider", "local")
+        except Exception:
+            provider = "local"
+
+        # Hardware info is only meaningful for the local llama.cpp engine
         hw = getattr(self, "_ai_hardware", None)
-        if not hw:
-            return ""
+        mode = None
+        if hw:
+            mode, _name = hw
 
-        mode, _name = hw
+        # Local model → show CPU / GPU explicitly
+        if provider == "local":
+            if mode == "gpu":
+                return "🧠 Local (GPU)"
+            if mode == "cpu":
+                return "🧠 Local (CPU)"
+            # Fallback if we don't know, but provider is local
+            return "🧠 Local"
 
-        if mode == "gpu":
-            # Small, readable, works in most fonts
-            return "🧠 GPU"
-        elif mode == "cpu":
-            return "🧠 CPU"
+        # Remote backends → prioritise provider label, not local GPU
+        if provider == "gpt":
+            return "🌐 GPT"
+        if provider == "gemini":
+            return "🌐 Gemini"
+        if provider == "copilot":
+            return "🌐 Copilot"
+        if provider == "selfhost":
+            # Optional: include a hint of the base URL host, if configured
+            try:
+                base_url = (settings.get("base_url") or "").strip()  # type: ignore[name-defined]
+            except Exception:
+                base_url = ""
+            host = ""
+            if base_url:
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(base_url).hostname or ""
+                except Exception:
+                    host = ""
+            return f"🌐 Selfhost{f' ({host})' if host else ''}"
 
-        return ""
+        # Unknown / future providers
+        return f"🌐 {provider}"
 
     def _update_status_with_git(self) -> None:
-        """Render the current base status plus AI hardware + Git info."""
-        if not self.footer:
+        """Render the current status message plus AI provider + Git info in the footer."""
+        if not getattr(self, "footer", None):
             return
 
         git_part = self._format_git_status_summary()
         ai_part = self._format_ai_hardware_status()
 
-        parts: list[str] = []
-        if self._base_status:
-            parts.append(self._base_status)
+        text = Text()
+
+        # 1) Primary status message (search, errors, etc.)
+        if getattr(self, "_base_status", ""):
+            try:
+                base = Text.from_markup(self._base_status)
+            except Exception:
+                # Fallback if markup is malformed
+                base = Text(self._base_status)
+
+            # Make the whole base status bold on top of any inner styles
+            base.stylize("bold", 0, len(base))
+            text.append(base)
+
+            if ai_part or git_part:
+                text.append("   │   ", style="dim")
+
+        # 2) AI mode / provider segment
         if ai_part:
-            parts.append(ai_part)
+            text.append(ai_part, style="magenta")
+            if git_part:
+                text.append("   │   ", style="dim")
+
+        # 3) Git status
         if git_part:
-            parts.append(git_part)
+            text.append(git_part, style="yellow")
 
-        full = "    |    ".join(parts)
-
-        # Update the footer widget
-        self.footer.set_message(full)
+        # If absolutely nothing was added, keep it empty instead of "None"
+        self.footer.set_message(text if text.plain else "")
 
     # ---------- Trash helpers ----------
     def _init_trash_dir(self) -> tuple[Path, Path]:
@@ -372,7 +453,6 @@ class ShellPilotApp(App):
             return False
 
     # ---------- Layout ----------
-    # ---------- Layout ----------
     def compose(self) -> ComposeResult:
         """Compose the UI layout."""
 
@@ -405,18 +485,9 @@ class ShellPilotApp(App):
                 yield self.preview
                 self.preview_container = preview_container
 
-<<<<<<< HEAD
-        # STATUS BAR (now the only bottom bar)
-        self.footer = ShellPilotFooter(id="status")
+        # Footer now acts as the status bar (no keybinding hints here)
+        self.footer = ShellPilotFooter(id="footer")
         yield self.footer
-=======
-        # STATUS BAR
-        self.status = Static("", id="status")
-        yield self.status
-
-        self.footer_bar = Footer()
-        yield self.footer_bar
->>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 
     def on_mount(self) -> None:
         """App mounted: show an initial command for the start directory."""
@@ -434,7 +505,7 @@ class ShellPilotApp(App):
         if self.search_input:
             self.search_input.value = ""
 
-        # Initial status line
+        # Initial status line (will use search + git info)
         self._update_search_status()
 
         # 🔹 Initialize Git state for the starting directory
@@ -461,12 +532,6 @@ class ShellPilotApp(App):
                 output_container.styles.width = "2fr"
 
             self.refresh(layout=True)
-
-        self._set_status("Status bar online 🧠 (this should be above the key bindings)")
-
-    def action_open_settings(self) -> None:
-        """Open the Settings dialog (HF token, etc.)."""
-        self.push_screen(SettingsScreen(), self._handle_settings_result)
 
     def _handle_settings_result(self, result: dict[str, Any] | None) -> None:
         """Callback when Settings dialog is dismissed."""
@@ -547,7 +612,6 @@ class ShellPilotApp(App):
             )
 
         self._set_status("Settings saved (HF + AI provider keys updated).")
-
 
     # ---------- Helpers ----------
     def _mask_api_key(self, key: str | None) -> str:
@@ -677,13 +741,9 @@ class ShellPilotApp(App):
         # - runs AI explain (action_ai_explain_file)
         # - previews a file / log / image, etc.
 
-        self._set_status(f"In directory: {path}")
+        self._base_status = ""  # Clear any transient message
+        self._update_status_with_git()
         self._save_session()
-<<<<<<< HEAD
-        self._update_search_status()
-=======
-        self._update_footer_bindings_visibility()
->>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 
     def _get_selected_path(self) -> Optional[Path]:
         """Return the Path of the currently selected item in the file list."""
@@ -974,6 +1034,10 @@ class ShellPilotApp(App):
         home = Path.home()
         self._set_directory(home)
         self._set_status(f"In home directory: {home}")
+
+    def action_open_settings(self) -> None:
+        """Open the Settings dialog (HF token, etc.)."""
+        self.push_screen(SettingsScreen(), self._handle_settings_result)
 
     def action_focus_search(self) -> None:
         """Focus the filter input above the file list."""
@@ -1296,26 +1360,83 @@ class ShellPilotApp(App):
                    if restore_path != orig_path else "")
             )
 
-    # ---------- Page up / page down in the file list ----------
+    def action_open_key_help(self) -> None:
+        """Show a popup dialog with all key bindings (replacing footer key bar)."""
+        help_text = (
+            "[b]Navigation[/b]\n"
+            "  h              Home (~)\n"
+            "  t              Open trash view\n"
+            "  Left/Right     Up directory / enter / preview\n"
+            "  PageUp/Down    Scroll file list\n"
+            "\n"
+            "[b]Files & Trash[/b]\n"
+            "  Enter          Run last command / refresh preview\n"
+            "  e              Open in editor\n"
+            "  Delete         Move to ShellPilot trash\n"
+            "  r              Restore selected (in trash view)\n"
+            "  E              Empty trash (in trash view)\n"
+            "\n"
+            "[b]Search & Bookmarks[/b]\n"
+            "  /              Focus filter input\n"
+            "  Ctrl+B         Bookmark current directory\n"
+            "  Ctrl+J         Jump to next bookmark\n"
+            "\n"
+            "[b]AI & Command Palette[/b]\n"
+            "  a              AI explain current file\n"
+            "  : / Ctrl+P     Command palette\n"
+            "\n"
+            "[b]App & UI[/b]\n"
+            "  Ctrl+,         Settings\n"
+            "  ?              Toggle side help panel\n"
+            "  q              Quit ShellPilot\n"
+            "  F1             Show this key help dialog\n"
+        )
 
-    def _move_cursor_page(self, direction: int, page_size: int = 10) -> None:
-        """
-        Move the file-list selection by a 'page' of items.
+        self.push_screen(KeyHelpScreen(help_text))
 
-        direction: -1 for up, +1 for down
-        page_size: how many rows to step (tweak as you like)
+    def action_empty_trash(self) -> None:
         """
-        if not self.file_list:
+        Permanently delete all items in the ShellPilot trash.
+
+        Only works while viewing the trash directory.
+        """
+        if not self._in_trash_view():
+            if self.output:
+                self.output.update(
+                    "[b]Empty trash:[/b] You must be viewing the trash.\n"
+                    "Press 't' to jump to the trash first."
+                )
+            self._set_status("Empty trash: not in trash view")
             return
 
-        # FileList inherits from ListView, which exposes these actions.
-        if direction < 0:
-            mover = self.file_list.action_cursor_up
-        else:
-            mover = self.file_list.action_cursor_down
+        # Danger, but user explicitly invoked it from trash view
+        errors: list[str] = []
+        for child in self.trash_dir.iterdir():
+            if child == self.trash_index_path:
+                continue
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            except Exception as e:
+                errors.append(f"{child}: {e}")
 
-        for _ in range(page_size):
-            mover()
+        self.trash_index = {}
+        self._save_trash_index()
+        self.file_list and self.file_list.refresh_entries()
+
+        if errors:
+            if self.output:
+                self.output.update(
+                    "[b]Empty trash completed with errors:[/b]\n"
+                    + "\n".join(f"- {line}" for line in errors)
+                )
+            self._set_status("Empty trash: some items could not be removed")
+        else:
+            if self.output:
+                self.output.update("[b]Trash emptied.[/b]")
+            self._set_status("Trash emptied")
 
     def action_page_up(self) -> None:
         """Move the selection bar up by one page."""
@@ -1325,7 +1446,6 @@ class ShellPilotApp(App):
         """Move the selection bar down by one page."""
         self._move_cursor_page(direction=1)
 
-    # ---------- AI helpers ----------
     def action_switch_ai_model(self) -> None:
         """
         Let the user pick an AI model (small → large).
@@ -1458,6 +1578,26 @@ class ShellPilotApp(App):
             started_at,
         )
 
+    def _move_cursor_page(self, direction: int, page_size: int = 10) -> None:
+        """
+        Move the file-list selection by a 'page' of items.
+
+        direction: -1 for up, +1 for down
+        page_size: how many rows to step (tweak as you like)
+        """
+        if not self.file_list:
+            return
+
+        # FileList inherits from ListView, which exposes these actions.
+        if direction < 0:
+            mover = self.file_list.action_cursor_up
+        else:
+            mover = self.file_list.action_cursor_down
+
+        for _ in range(page_size):
+            mover()
+
+    # ---------- AI helpers ----------
     def _show_ai_timing(self, entry_path: Path, label: str, started_at: float) -> None:
         """Display how long an AI task took for a given path."""
         elapsed = time.perf_counter() - started_at
@@ -2025,16 +2165,19 @@ class ShellPilotApp(App):
         self._set_status(f"AI: analysis complete for {path.name}")
 
         if self.output:
-            # Prepend a small timing line if we have it
+            # Build a composite renderable: dim timing line + blank + Markdown body
             if elapsed is not None:
-                timing_line = f"[dim]🤖 Completed in {elapsed:.2f}s[/dim]\n"
-                body = timing_line + "\n" + answer
+                timing = Text(f"🤖 Completed in {elapsed:.2f}s", style="dim")
+                content = Group(
+                    timing,
+                    Text(""),          # blank line
+                    Markdown(answer),  # AI response as markdown
+                )
             else:
-                body = answer
+                content = Markdown(answer)
 
-            md = Markdown(body)
             panel = Panel.fit(
-                md,
+                content,
                 title=f"AI: {path.name}",
                 border_style="cyan",
             )
@@ -2282,51 +2425,6 @@ class ShellPilotApp(App):
             )
 
     # ---------- Background workers ----------
-
-    def action_empty_trash(self) -> None:
-        """
-        Permanently delete all items in the ShellPilot trash.
-
-        Only works while viewing the trash directory.
-        """
-        if not self._in_trash_view():
-            if self.output:
-                self.output.update(
-                    "[b]Empty trash:[/b] You must be viewing the trash.\n"
-                    "Press 't' to jump to the trash first."
-                )
-            self._set_status("Empty trash: not in trash view")
-            return
-
-        # Danger, but user explicitly invoked it from trash view
-        errors: list[str] = []
-        for child in self.trash_dir.iterdir():
-            if child == self.trash_index_path:
-                continue
-            try:
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            except Exception as e:
-                errors.append(f"{child}: {e}")
-
-        self.trash_index = {}
-        self._save_trash_index()
-        self.file_list and self.file_list.refresh_entries()
-
-        if errors:
-            if self.output:
-                self.output.update(
-                    "[b]Empty trash completed with errors:[/b]\n"
-                    + "\n".join(f"- {line}" for line in errors)
-                )
-            self._set_status("Empty trash: some items could not be removed")
-        else:
-            if self.output:
-                self.output.update("[b]Trash emptied.[/b]")
-            self._set_status("Trash emptied")
-
     def _apply_search_query(self) -> None:
         """Push the current SearchQuery down into the FileList and update status."""
         if not self.file_list:
@@ -2343,28 +2441,13 @@ class ShellPilotApp(App):
         q = self._search_query
         text = (getattr(q, "text", "") or "").strip()
         recursive = getattr(q, "recursive", False)
-        in_trash = self._in_trash_view()
 
         if text:
             suffix = " (recursive)" if recursive else ""
-            # Search status is global; no need to mention trash-specific keys here
-            self._set_status(
-                f"Search{suffix}: {text!r}  •  Enter: re-run  •  /: edit  •  Esc: clear"
-            )
+            self._set_status(f"Search{suffix}: {text!r}")
         else:
-            if in_trash:
-                # Trash bar: only here do we advertise r / E
-                self._set_status(
-                    "←: up dir • →: enter/preview • h: home (~) • t: trash view "
-                    "• r: restore • E: empty trash • Enter: run "
-                    "• /: filter • e: edit • Ctrl+B: bookmark • Ctrl+J: next bookmark • ?: toggle help"
-                )
-            else:
-                # 🌱 Main bar: no restore/empty hints here
-                self._set_status(
-                    "←: up dir • →: enter/preview • h: home (~) • t: trash view • Delete: move to trash "
-                    "• Enter: run • /: filter • e: edit • Ctrl+B: bookmark • Ctrl+J: next bookmark • ?: toggle help"
-                )
+            # No active search → fall back to base status (directory + git + AI)
+            self._update_status_with_git()
 
     def _handle_action_menu_result(self, result: dict[str, Any] | None) -> None:
         if result is None:

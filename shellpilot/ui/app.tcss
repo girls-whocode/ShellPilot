@@ -5,13 +5,8 @@ Screen {
 }
 
 /* Main row: left | output | help */
-<<<<<<< HEAD
-#main-row {
-    height: 1fr;   /* take everything above the status bar */
-=======
 Horizontal {
     height: 1fr;
->>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
 }
 
 /* LEFT PANE LAYOUT */
@@ -73,34 +68,21 @@ OutputPanel {
     text-opacity: 0.95;
 }
 
-<<<<<<< HEAD
-/* BOTTOM BAR: status + footer keybindings */
-
-#bottom-bar {
-    height: 2;          /* exactly two rows: status + footer */
-    min-height: 2;
-    layout: vertical;   /* stack children */
-}
-
-/* STATUS BAR – replaces the old key bar */
-=======
 /* STATUS BAR */
 
->>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
-#status {
+#footer {
     dock: bottom;
-    height: 1;
-    min-height: 1;
+    /* Let Textual size this based on content + border */
     padding: 0 1;
-    border-top: solid #333333;
-    color: #bbbbff;
-<<<<<<< HEAD
-    background: #111118;
-}
-=======
+    background: #202020;
+    color: #e0e0e0;
+    border-top: solid #444444;
 }
 
-Footer {
-    dock: bottom;
+#footer .ai {
+    color: #6cf76c;  /* bright green */
 }
->>>>>>> parent of fb51984 (Resolved dark colored LS_COLORS that default from TERM)
+
+#footer .git {
+    color: #ffd479;  /* warm yellow */
+}
